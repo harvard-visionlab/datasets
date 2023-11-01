@@ -82,7 +82,8 @@ def download_data_from_url(
             #hash_prefix = r.group(1) if r else None
             matches = HASH_REGEX.findall(filename) # matches is Optional[Match[str]]
             hash_prefix = matches[-1] if matches else None
-
+            assert hash_prefix is not None, "check_hash is True, but the filename does not contain a hash_prefix. Expected <filename>-<hashid>.<ext>"
+        
         download_url_to_file(url, cached_file, hash_prefix, progress=progress)
 
     return cached_file

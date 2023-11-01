@@ -29,7 +29,7 @@ urls = {
 
 filename_with_hash = {
     "full": "imagenette2-6cbfac2384.tgz",
-    "320": "imagenette2-320-569b4497c9BREAKME.tgz",
+    "320": "imagenette2-320-569b4497c9.tgz",
     "160": "imagenette2-160-64d0c4859f.tgz"
 }
 
