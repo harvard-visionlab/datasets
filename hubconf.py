@@ -1,5 +1,5 @@
 import torch, torchvision
-from . import datasets as _datasets
+import .datasets
 
 dependencies = ['torch', 'torchvision']
 
