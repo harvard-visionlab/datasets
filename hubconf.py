@@ -22,9 +22,14 @@ def hello():
 
 def imagenette(*args, **kwargs):
     with temporary_sys_path(current_dir):
-        import datasets
         from datasets.images.imagenette import imagenette
-        print(datasets.__file__)
-        names = [name for name,m in datasets.__dict__.items() if not name.startswith("__") and callable(m)]
-        print(names)
     return imagenette(*args, **kwargs)
+
+# ==============================================================
+#  some handy lower-level utils
+# ==============================================================
+
+def calculate_sha256(*args, **kwargs):
+    with temporary_sys_path(current_dir):
+        from datasets.utils import calculate_sha256
+    return calculate_sha256
