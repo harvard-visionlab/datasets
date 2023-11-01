@@ -20,10 +20,10 @@ def hello():
 
     return say_hello
 
-def imagenette():
+def imagenette(*args, **kwargs):
     with temporary_sys_path(current_dir):
         import datasets
         print(datasets.__file__)
         names = [name for name,m in datasets.__dict__.items() if not name.startswith("__") and callable(m)]
         print(names)
-    return datasets.imagenette
+    return datasets.imagenette(*args, **kwargs)
