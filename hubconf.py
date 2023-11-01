@@ -10,4 +10,5 @@ def hello():
   return say_hello
 
 def imagenette():
+  print(_datasets.__dict__())
   return _datasets.imagenette
