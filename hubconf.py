@@ -3,4 +3,7 @@ import torch, torchvision
 dependencies = ['torch', 'torchvision']
 
 def hello():
-  print("Hello World")
+  def say_hello(name="World"):
+    print(f"Hello {name}")
+
+  return say_hello
