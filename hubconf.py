@@ -1,5 +1,5 @@
 import torch, torchvision
-from . import datasets
+import datasets as _datasets
 
 dependencies = ['torch', 'torchvision']
 
@@ -10,4 +10,4 @@ def hello():
   return say_hello
 
 def imagenette():
-  return datasets.imagenette
+  return _datasets.imagenette
