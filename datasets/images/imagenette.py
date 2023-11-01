@@ -27,7 +27,7 @@ urls = {
   "160": "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-160.tgz",
 }
 
-num_expected = dict(train=9469)
+num_expected = dict(train=9469, val=3925)
 
 def imagenette(split, cache_dir=None, res='320', transform=None):
     assert split in ['train', 'val'], f"Expected split to be `train` or `val`, got {split}"
@@ -37,7 +37,7 @@ def imagenette(split, cache_dir=None, res='320', transform=None):
     dataset_dir = os.path.join(extracted_folder, split)
     dataset = datasets.ImageFolder(dataset_dir, transform=transform)
     num_images = len(dataset)
-    # assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
+    assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
     
     return dataset
   

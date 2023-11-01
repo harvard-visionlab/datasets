@@ -23,7 +23,8 @@ def hello():
 def imagenette(*args, **kwargs):
     with temporary_sys_path(current_dir):
         import datasets
+        from datasets.images.imagenette import imagenette
         print(datasets.__file__)
         names = [name for name,m in datasets.__dict__.items() if not name.startswith("__") and callable(m)]
         print(names)
-    return datasets.imagenette(*args, **kwargs)
+    return imagenette(*args, **kwargs)
