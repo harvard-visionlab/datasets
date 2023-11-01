@@ -19,6 +19,8 @@ import os
 from torchvision import datasets
 from ..utils import get_remote_data_file
 
+__all__ = ['imagenette']
+
 urls = {
   "full": "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2.tgz",
   "320": "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-320.tgz",
