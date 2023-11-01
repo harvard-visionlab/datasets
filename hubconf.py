@@ -24,4 +24,5 @@ def imagenette():
     with temporary_sys_path(current_dir):
         import datasets
         print(datasets.__file__)
+        print(datasets.__dict__)
     return datasets.imagenette
