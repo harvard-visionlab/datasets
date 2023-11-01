@@ -88,16 +88,17 @@ def download_data_from_url(
     return cached_file
 
 def get_remote_data_file(url, cache_dir=torch.hub.get_dir().replace("/hub", "/data"),
-                         progress=True, check_hash=False, expected_hash=None) -> Mapping[str, Any]:
+                         progress=True, check_hash=False, file_name=None) -> Mapping[str, Any]:
 
     if cache_dir is None: 
-      cache_dir = torch.hub.get_dir().replace("/hub", "/data")
-
+        cache_dir = torch.hub.get_dir().replace("/hub", "/data")
+    
     cached_filename = download_data_from_url(
         url = url,
         data_dir = cache_dir,
         progress = progress,
         check_hash = check_hash,
+        file_name=file_name,
     )
 
     print(f"cached_filename: {cached_filename}")
@@ -131,6 +132,7 @@ def decompress_tarfile_if_needed(file_path, output_dir=None):
         print(f"Contents have already been extracted to {expected_extracted_folder}.")
     else:
         # Contents have not been extracted; proceed with extraction
+        print(f"Extracting {file_path} to {output_dir}")
         with tarfile.open(file_path, 'r:*') as tar:
             tar.extractall(path=output_dir)
             print(f"File {file_path} has been decompressed to {output_dir}.")

@@ -27,13 +27,20 @@ urls = {
   "160": "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-160.tgz",
 }
 
+filename_with_hash = {
+    "full": "imagenette2-6cbfac2384.tgz",
+    "320": "imagenette2-320-569b4497c9BREAKME.tgz",
+    "160": "imagenette2-160-64d0c4859f.tgz"
+}
+
 num_expected = dict(train=9469, val=3925)
 
 def imagenette(split, cache_dir=None, res='320', transform=None):
     assert split in ['train', 'val'], f"Expected split to be `train` or `val`, got {split}"
     assert res in urls.keys(), f"Expected res to be a string, one of {urls.keys()}, got {res}"
     url = urls[res]
-    cached_filename, extracted_folder = get_remote_data_file(url, cache_dir=cache_dir)
+    file_name = filename_with_hash[res]
+    cached_filename, extracted_folder = get_remote_data_file(url, cache_dir=cache_dir, file_name=file_name, check_hash=True)
     dataset_dir = os.path.join(extracted_folder, split)
     dataset = datasets.ImageFolder(dataset_dir, transform=transform)
     num_images = len(dataset)
