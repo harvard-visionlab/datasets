@@ -12,6 +12,8 @@ import tarfile
 from torch.hub import download_url_to_file, get_dir
 from pdb import set_trace
 
+__all__ = ['download_data_from_url', 'get_remote_data_file', 'calculate_sha256']
+
 # matches bfd8deac from resnet18-bfd8deac.pth
 HASH_REGEX = re.compile(r'-([a-f0-9]*)\.')
 
