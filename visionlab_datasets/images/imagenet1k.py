@@ -42,6 +42,25 @@ resolutions = [k[1] for k in urls.keys()]
 
 num_expected = dict(train=1_281_167, val=50_000)
 
+class ImagNetIndex(datasets.ImageNet):
+    
+    def __getitem__(self, index: int) -> Tuple[Any, Any]:
+            """
+            Args:
+                index (int): Index
+
+            Returns:
+                tuple: (sample, target) where target is class_index of the target class.
+            """
+            path, target = self.samples[index]
+            sample = self.loader(path)
+            if self.transform is not None:
+                sample = self.transform(sample)
+            if self.target_transform is not None:
+                target = self.target_transform(target)
+
+            return sample, target, index
+    
 def download_toolkit_if_needed(root_folder):
     toolkit_filename = os.path.join(root_folder, "ILSVRC2012_devkit_t12.tar.gz")
     if not os.path.isfile(toolkit_filename):
@@ -72,7 +91,7 @@ def imagenet1k(split, res=None, cache_dir=None, transform=None):
     root_folder = Path(extracted_folder).parent
     download_toolkit_if_needed(root_folder)
     
-    dataset = datasets.ImageNet(root_folder, split=split, transform=transform)
+    dataset = ImagNetIndex(root_folder, split=split, transform=transform)
     num_images = len(dataset)
     assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
     
