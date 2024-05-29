@@ -20,6 +20,8 @@ Citation:
 import os
 from torchvision import datasets
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+
 from ..utils import get_remote_data_file, download_data_from_url, get_signed_s3_url
 
 from pdb import set_trace
