@@ -12,7 +12,7 @@ from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
 from s3_filestore.auth import get_client_with_userdata
-from s3_filestore.utils import parse_s3_url
+from s3_filestore.utils import parse_s3_uri
 
 import torch
 import tarfile
@@ -29,7 +29,7 @@ HASH_REGEX = re.compile(r'-([a-f0-9]*)\.')
 
 def get_signed_s3_url(url):
     assert url.startswith("s3://"), f"Expected s3_url starting with s3://, got {url}"
-    bucket_name, bucket_key = parse_s3_url(url)
+    bucket_name, bucket_key = parse_s3_uri(url)
     url = get_signed_url(bucket_name, bucket_key)
     
     return url
@@ -123,7 +123,7 @@ def get_remote_data_file(url, cache_dir=None, progress=True,
                          expires_in_seconds=3600, profile='wasabi') -> Mapping[str, Any]:
     
     if url.startswith("s3://"):
-        bucket_name, bucket_key = parse_s3_url(url)
+        bucket_name, bucket_key = parse_s3_uri(url)
         print(bucket_name, bucket_key)
         url = get_signed_url(bucket_name, bucket_key)
         print(url)
