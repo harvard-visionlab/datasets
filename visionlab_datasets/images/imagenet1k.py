@@ -96,9 +96,6 @@ def imagenet1k(split, res=None, cache_dir=None, transform=None):
     dataset = ImagNetIndex(root_folder, split=split, transform=transform)
     num_images = len(dataset)
     assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
-    
-    # no special mapping of output activations needed
-    output_mapping = None
-    
-    return dataset, output_mapping
+        
+    return dataset
   
