@@ -94,6 +94,7 @@ def imagenet1k(split, res=None, cache_dir=None, transform=None):
     download_toolkit_if_needed(root_folder)
     
     dataset = ImagNetIndex(root_folder, split=split, transform=transform)
+    dataset.name = 'imagenet1k'
     num_images = len(dataset)
     assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
         
