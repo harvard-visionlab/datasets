@@ -3,7 +3,7 @@ from . import images as image_datasets
 from . import streaming as streaming_datasets
 from .utils import *
 
-def load_dataset(dataset_name, split, fmt, res=None, transform=None):
+def load_dataset(dataset_name, split, fmt='images', res=None, transform=None):
     if fmt=="images":
         dataset = image_datasets.__dict__[dataset_name](split, res=res, transform=transform)
     elif fmt=="ffcv":
