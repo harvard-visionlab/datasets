@@ -34,14 +34,14 @@ def get_signed_s3_url(url):
     
     return url
 
-def get_signed_url(bucket_name, bucket_key, expires_in_seconds=3600, profile='wasabi'):
+def get_signed_url(bucket_name, bucket_key, expires_in_seconds=3600, profile=os.environ.get('S3_PROFILE', None)):
     s3_client = get_client_with_userdata(profile)
     signed_url = s3_client.generate_presigned_url('get_object', 
                                                   Params={'Bucket': bucket_name, 'Key': bucket_key},
                                                   ExpiresIn=expires_in_seconds,
                                                   HttpMethod='GET')
     return signed_url
-
+    
 def download_data_from_url(
     url: str,
     data_dir: Optional[str] = None,
@@ -111,7 +111,7 @@ def download_data_from_url(
         cached_file = os.path.join(hash_dir, filename)
     else:
         cached_file = os.path.join(data_dir, filename)
-        
+
     if not os.path.exists(cached_file):
         sys.stderr.write('Downloading: "{}" to {}\n'.format(url, cached_file))
         download_url_to_file(url, cached_file, hash_prefix, progress=progress)
@@ -120,7 +120,7 @@ def download_data_from_url(
 
 def get_remote_data_file(url, cache_dir=None, progress=True, 
                          check_hash=False, hash_prefix=None, file_name=None,
-                         expires_in_seconds=3600, profile='wasabi') -> Mapping[str, Any]:
+                         expires_in_seconds=3600, profile=os.environ.get('S3_PROFILE', None)) -> Mapping[str, Any]:
     
     if url.startswith("s3://"):
         bucket_name, bucket_key = parse_s3_uri(url)
@@ -130,7 +130,7 @@ def get_remote_data_file(url, cache_dir=None, progress=True,
 
     if cache_dir is None: 
         cache_dir = default_data_dir
-        
+
     cached_filename = download_data_from_url(
         url = url,
         data_dir = cache_dir,
