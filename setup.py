@@ -4,7 +4,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 version = {}
-with open("visionlab_datasets/__version__.py") as fp:
+with open("visionlab_datasets/version.py") as fp:
     exec(fp.read(), version)
 
 setup(
