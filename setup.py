@@ -3,9 +3,13 @@ from setuptools import setup, find_packages
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
+version = {}
+with open("visionlab_datasets/__version__.py") as fp:
+    exec(fp.read(), version)
+
 setup(
     name="datasets",
-    version="0.1.1",
+    version=version['__version__'],
     author="George Alvarez",
     author_email="alvarez@wjh.harvard.edu",
     description="Datasets for neuro-ai research",
