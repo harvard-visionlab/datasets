@@ -116,6 +116,10 @@ def imagenetV2(split, res=None, cache_dir=None, transform=None):
     """
     num_images = len(dataset)
     assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
-        
+
+    # make sure the assigned label matches the folder-number
+    for path,label in dataset.imgs:
+        assert int(Path(path).parent.name) == label, f"Path foldername conflicts with label ({label}), {path}"
+    
     return dataset
   
