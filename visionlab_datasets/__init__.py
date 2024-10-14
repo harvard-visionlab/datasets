@@ -2,6 +2,7 @@ from . import ffcv as ffcv_datasets
 from . import images as image_datasets
 from . import streaming as streaming_datasets
 from .utils import *
+from .__version__ import *
 
 def load_dataset(dataset_name, split, fmt='images', res=None, transform=None):
     if fmt=="images":
