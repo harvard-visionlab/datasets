@@ -7,7 +7,7 @@ from ..find_datasets import get_streaming_dirs
 
 __all__ = ['imagenet1k']
 
-bucket_locations_by_resolution = {
+bucket_locations_by_resolution_and_quality = {
     (256, 100): "vision-datasets/imagenet1k-litdata/streaming-s256-l512-jpgbytes-q100",
     (256, 95): "vision-datasets/imagenet1k-litdata/streaming-s256-l512-jpgbytes-q95"
 }
@@ -17,7 +17,7 @@ num_expected = {
     "train": 1_281_167,
 }
 
-def imagenet1k(split, res=256, quality=100, transform=None, profile='wasabi', **kwargs):
+def imagenet1k(split, res=256, quality=100, transforms=None, profile='wasabi', **kwargs):
     '''
         split: train or val
         res: (int) resolution of shortest edge for preprocessed dataset
@@ -30,25 +30,29 @@ def imagenet1k(split, res=256, quality=100, transform=None, profile='wasabi', **
     if res is None: res = 256
     if quality is None: quality = 100
     splits = list(num_expected.keys())
-    resolutions = list(set([res for res,_ in  bucket_locations_by_resolution.keys()]))
-    qualities = list(set([quality for _,quality in  bucket_locations_by_resolution.keys()]))
+    resolutions = list(set([res for res,_ in  bucket_locations_by_resolution_and_quality.keys()]))
+    qualities = list(set([quality for _,quality in  bucket_locations_by_resolution_and_quality.keys()]))
     if res is None: res = 'full'
     assert split in splits, f"Expected split to be in {splits}, got {split}"
     assert res in resolutions, f"Expected res to be one of {resolutions}, got {res}"
     assert quality in qualities, f"Expected quality to be one of {qualities}, got {quality}"
     
     # get the local and remote directories for this dataset:
-    bucket_prefix = os.path.join(bucket_locations_by_resolution[(res,quality)], split)
+    bucket_prefix = os.path.join(bucket_locations_by_resolution_and_quality[(res,quality)], split)
     dirs = get_streaming_dirs(bucket_prefix)
 
     if dirs['remote_dir'] is not None and dirs['remote_dir'].startswith("s3:"):
         aws_credentials = get_credentials_by_profile(profile)
     else:
         aws_credentials = None
-
-    dataset = StreamingDatasetVisionlab(Dir(path=dirs['local_dir'], url=dirs['remote_dir']),
-                                        storage_options=aws_credentials, **kwargs)
     
+    # create the dataset 
+    dataset = StreamingDatasetVisionlab(Dir(path=dirs['local_dir'], url=dirs['remote_dir']),
+                                        storage_options=aws_credentials, 
+                                        transforms=transforms,
+                                        **kwargs)
+    
+    # assert expected number of samples
     num_images = len(dataset)
     assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
         
