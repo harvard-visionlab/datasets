@@ -33,9 +33,9 @@ def get_credentials_by_profile(profile_name):
         
         # Return credentials and endpoint URL
         return {
-            "AWS_ACCESS_KEY_ID": credentials.access_key,
-            "AWS_SECRET_ACCESS_KEY": credentials.secret_key,
-            "AWS_ENDPOINT_URL": endpoint_url
+            "aws_access_key_id": credentials.access_key,
+            "aws_secret_access_key": credentials.secret_key,
+            "endpoint_url": endpoint_url
         }
 
     except ProfileNotFound:
