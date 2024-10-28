@@ -25,7 +25,7 @@ class StreamingDatasetVisionlab(StreamingDataset):
             body.append(f"remote_dir: {self.input_dir.url}")
         body += [f"\nTransforms on '{self.image_field}':"]
         if hasattr(self, "transforms") and self.transforms is not None:
-            body += [repr(dataset.transforms)
+            body += [repr(self.transforms)
                      .replace("\n",f"\n{tab}")
                      .replace('\n)', '\n' + ' ' * _repr_indent + ')')]
         else:
