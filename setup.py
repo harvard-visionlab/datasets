@@ -18,7 +18,7 @@ setup(
     url="https://github.com/harvard-visionlab/datasets",
     packages=find_packages(),
     install_requires=[
-        "s3-filestore @ git+https://github.com/harvard-visionlab/s3-filestore.git"
+        # "s3-filestore @ git+https://github.com/harvard-visionlab/s3-filestore.git"
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -26,4 +26,10 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.6',
+    entry_points={
+        'console_scripts': [
+            'download_rawdata=visionlab_datasets.cli.download_rawdata:main',
+            'generate_lightning_dataset=visionlab_datasets.cli.generate_lightning_dataset:main',
+        ],
+    },
 )
