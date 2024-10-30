@@ -30,6 +30,8 @@ setup(
         'console_scripts': [
             'download_rawdata=visionlab_datasets.cli.download_rawdata:main',
             'generate_lightning_dataset=visionlab_datasets.cli.generate_lightning_dataset:main',
+            'check_dataset=visionlab_datasets.cli.check_dataset:main',
+            'sync_dataset=visionlab_datasets.cli.sync_dataset:main',
         ],
     },
 )

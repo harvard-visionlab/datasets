@@ -7,10 +7,13 @@
 '''
 import os, io
 import fire
+from pathlib import Path
 from litdata import optimize
 from PIL import Image
 from torchvision import datasets, transforms
 from typing import Any, Tuple
+from functools import partial
+from pdb import set_trace
 
 format_mapping = {
     "jpgbytes": "JPEG",
@@ -113,22 +116,48 @@ class ResizeShortWithMaxLong():
 #  generation function
 # ===============================================================
 
+# helper function that will be called by works with (path,label,index) tuples
+def get_sample(item, transform=None, image_format="jpgbytes", quality=100):
+    actual_format = format_mapping[image_format]
+    path, label, index = item
+
+    img = Image.open(path)
+    if transform is not None:
+        img = transform(img)
+
+    if image_format.endswith("bytes"):
+        image_bytes = io.BytesIO()
+        img.save(image_bytes, format=actual_format, quality=quality, optimize=True)
+        image_bytes.seek(0)
+        image = image_bytes.read()
+    else:
+        image = img
+
+    data = {
+        "index": index,
+        "image": image,
+        "label": label,
+        "path": path,
+    }
+
+    return data
+    
 def generate_dataset(root_dir, split, output_root_dir, short_resize=None, long_crop=None, quality=100, 
                      image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None):
     
     # make sure image_format is supported
     assert image_format in format_mapping, f"Expected format to be in: {format_mapping}, got {image_format}" 
-    actual_format = format_mapping[image_format]
     
     # set output directory based on args
     folder_name = f"streaming-s{short_resize}-l{long_crop}-{image_format}-q{quality}"
     output_dir = os.path.join(output_root_dir, folder_name, split)
-    
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
     # load dataset
     if "imagenet1k" in root_dir:
-        dataset = ImageNet1k(root_dir, split=split, transform=transform)
+        dataset = ImageNet1k(root_dir, split=split)
     else:
-        dataset = ImageFolder(root_dir, split=split, transform=transform)
+        dataset = ImageFolder(os.path.join(root_dir, split))
     print(dataset)
     if num_expected is not None:
         assert len(dataset)==num_expected, f"oops, expected {num_expected} samples, got {len(dataset)}"
@@ -147,33 +176,11 @@ def generate_dataset(root_dir, split, output_root_dir, short_resize=None, long_c
         raise ValueError('You must provide a short_resize value to use long_crop')
                          
     transform = transforms.Compose(transform_list)
-    
-    # helper function that will be called by works with (path,label,index) tuples
-    def get_sample(item):
-        path, label, index = item
-        
-        img = transform(Image.open(path))
-        
-        if image_format.endswith("bytes"):
-            image_bytes = io.BytesIO()
-            img.save(image_bytes, format=actual_format, quality=quality, optimize=True)
-            image_bytes.seek(0)
-            image = image_bytes.read()
-        else:
-            image = img
-            
-        data = {
-            "index": index,
-            "image": image,
-            "label": label,
-            "path": path,
-        }
-        
-        return data
+    get_sample_fun = partial(get_sample, transform=transform, image_format=image_format, quality=quality)
     
     # store images into the chunks
     optimize(
-        fn=get_sample,  # The function applied over each input.
+        fn=get_sample_fun,  # The function applied over each input.
         inputs=inputs,  # Provide any inputs. The fn is applied on each item.
         output_dir=output_dir,  # The directory where the optimized data are stored.
         num_workers=len(os.sched_getaffinity(0)) - 1,  # The number of workers. The inputs are distributed among them.
