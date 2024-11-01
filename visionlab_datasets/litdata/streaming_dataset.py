@@ -43,18 +43,27 @@ class StreamingDatasetVisionlab(StreamingDataset):
         lines += ['\nSample Info:']
         sample = self.__getitem__(0)
         any_bytes = False
-        for key,value in sample.items():
-            lines += [" " * _repr_indent + f"{key}: {type(value)}"]
-            if isinstance(value, bytes): 
-                any_bytes = True
-        
+        if hasattr(sample, 'items'):
+            for key,value in sample.items():
+                lines += [" " * _repr_indent + f"{key}: {type(value)}"]
+                if isinstance(value, bytes): 
+                    any_bytes = True
+        else:
+            for idx,value in enumerate(sample):
+                lines += [" " * _repr_indent + f"{idx}: {type(value)}"]
+                if isinstance(value, bytes): 
+                    any_bytes = True            
+                    
         if any_bytes:
             lines += ['\nUsage Examples:']
             lines += [f'{tab}import io']
             lines += [f'{tab}from PIL import Image']
             lines += [f"{tab}sample = dataset[0]"]
-        for key,value in sample.items():
-            if isinstance(value, bytes):
-                lines += [f"{tab}pil_image = Image.open(io.BytesIO(sample['{key}']))"]
-
-        return "\n".join(lines)
+            
+            if hasattr(sample, 'items'):
+                for key,value in sample.items():
+                    if isinstance(value, bytes):
+                        lines += [f"{tab}pil_image = Image.open(io.BytesIO(sample['{key}']))"]
+            else:
+                lines += [f"{tab}pil_image = Image.open(io.BytesIO(sample[0]))"]
+            return "\n".join(lines)

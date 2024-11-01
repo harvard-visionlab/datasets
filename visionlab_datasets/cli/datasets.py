@@ -1,5 +1,6 @@
 from torchvision import datasets
 from pathlib import Path
+from typing import Any, Tuple
 
 class ImageNet1k(datasets.ImageNet):
     meta = dict(
