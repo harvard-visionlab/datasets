@@ -1,5 +1,20 @@
 # Prepare datasets
 
+# imagenet
+```
+tmux new -s dataprep
+
+# download rawdata to a scratch drive
+source activate datasets
+download_rawdata visionlab-datasets/imagenet1k-raw/ /n/holyscratch01/alvarez_lab/Lab/datasets/ --profile awsread
+
+# create streaming datasets
+
+# verify streaming datasets
+check_dataset --dataset_format litdata --local_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/ecoset-litdata/streaming-s256-l512-jpgbytes-q100/test --num_expected 28250
+
+```
+
 # ecoset
 
 ```

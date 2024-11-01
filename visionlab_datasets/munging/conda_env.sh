@@ -25,7 +25,7 @@ python -m pip install --upgrade git+https://github.com/lilohuang/PyTurboJPEG.git
 # python -m pip install --no-deps git+https://github.com/facebookresearch/FFCV-SSL.git#egg=FFCV-SSL
 
 # install ffcv (with dependencies, which will break things, which we'll fix, then reinstall...trust me)
-mamba install -y pkg-config compilers
+conda install -y pkg-config compilers
 # conda install -y opencv=4.6
 # pkg-config --modversion opencv4
 python -m pip install --force-reinstall git+https://github.com/facebookresearch/FFCV-SSL.git#egg=FFCV-SSL
@@ -53,9 +53,10 @@ python -m pip install nvidia-nvjpeg-cu12
 python -m pip install nvidia-nvjpeg2k-cu12
 
 # for jxl
-mamba install -y conda-forge::libbrotlicommon libjpeg-turbo anaconda::libpng conda-forge::libavif conda-forge::libjxl-tools
+conda install -y conda-forge::libbrotlicommon libjpeg-turbo anaconda::libpng conda-forge::libavif conda-forge::libjxl-tools
 python -m pip install jxlpy
 
 # install kernel
-python -m pip install ipykernel
+# python -m pip install ipykernel
+conda install -y ipykernel
 python -m ipykernel install --user --name=datasets
