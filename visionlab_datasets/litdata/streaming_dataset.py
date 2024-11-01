@@ -1,11 +1,16 @@
 from litdata import StreamingDataset
+from litdata.utilities.dataset_utilities import _read_updated_at
+from pdb import set_trace
 
 class StreamingDatasetVisionlab(StreamingDataset):
-    def __init__(self, *args, transforms=None, image_field='image', **kwargs):
+    def __init__(self, *args, transforms=None, image_field='image', expected_version=None, **kwargs):
         self.transforms = transforms
-        self.image_field = image_field
+        self.image_field = image_field        
         super().__init__(*args, **kwargs)
-    
+        self.version = _read_updated_at(self.input_dir) if self.input_dir is not None else None
+        if expected_version is not None:
+            assert self.version == str(expected_version), f"\n==> expected_version={expected_version}, got dataset.version={self.version}"
+            
     def __getitem__(self, idx):
         sample  = super().__getitem__(idx) # <- Whatever you returned from the DatasetOptimizer prepare_item method.
         if self.transforms is not None:
@@ -23,6 +28,8 @@ class StreamingDatasetVisionlab(StreamingDataset):
         if self.input_dir is not None:
             body.append(f"local_dir: {self.input_dir.path}")
             body.append(f"remote_dir: {self.input_dir.url}")
+            body.append(f"version: {self.version}")            
+            
         body += [f"\nTransforms on '{self.image_field}':"]
         if hasattr(self, "transforms") and self.transforms is not None:
             body += [repr(self.transforms)

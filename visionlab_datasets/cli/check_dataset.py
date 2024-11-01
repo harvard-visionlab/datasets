@@ -7,7 +7,7 @@ import shutil
 
 from pdb import set_trace
 
-def check_dataset(dataset_format, local_dir, num_expected):
+def check_dataset(dataset_format, local_dir, num_expected, expected_version=None):
     """
     Checks that a dataset has the expected number of items.
 
@@ -22,12 +22,16 @@ def check_dataset(dataset_format, local_dir, num_expected):
         check_dataset --dataset_format lightning --local_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/ecoset-litdata/streaming-s256-l512-jpgbytes-q100/train --num_expected 1444911
 
     """
-    if dataset_format == "lightning":
+    formats = ['lightning', 'litdata']
+    
+    if dataset_format == "lightning" or dataset_format == "litdata":
         from ..litdata.streaming_dataset import StreamingDatasetVisionlab
-        dataset = StreamingDatasetVisionlab(local_dir)
+        dataset = StreamingDatasetVisionlab(local_dir, expected_version=expected_version)
         print(dataset)
         assert len(dataset)==num_expected, f"Expected {num_expected} samples, got {len(dataset)}"
         print("\n==> Dataset OK\n")
+    else:
+        raise ValueError(f"Unrecognized dataset_format {dataset_format}, expected one of {formats}")
         
 def main():
     fire.Fire(check_dataset)

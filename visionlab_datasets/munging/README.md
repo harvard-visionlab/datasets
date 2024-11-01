@@ -11,7 +11,10 @@ download_rawdata visionlab-datasets/imagenet1k-raw/ /n/holyscratch01/alvarez_lab
 # create streaming datasets
 
 # verify streaming datasets
-check_dataset --dataset_format litdata --local_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/ecoset-litdata/streaming-s256-l512-jpgbytes-q100/test --num_expected 28250
+check_dataset --dataset_format litdata --local_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/litdata/imagenet1k-litdata/streaming-s256-l512-jpgbytes-q100/val --num_expected 50000
+
+# sync dataset
+sync_dataset /n/alvarez_lab_tier1/Users/alvarez/datasets/litdata/imagenet1k-litdata/streaming-s256-l512-jpgbytes-q100/ s3://visionlab-litdata/imagenet1k/streaming-s256-l512-jpgbytes-q100/ --profile lit-write
 
 ```
 
