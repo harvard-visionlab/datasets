@@ -38,8 +38,9 @@ sync_dataset /n/alvarez_lab_tier1/Users/alvarez/datasets/litdata/imagenet1k-litd
 sync_dataset /n/alvarez_lab_tier1/Users/alvarez/datasets/litdata/imagenet1k-litdata/streaming-s256-l512-jpgbytes-q75/ s3://visionlab-litdata/imagenet1k/streaming-s256-l512-jpgbytes-q75/ --profile lit-write
 
 # generate ffcv datasets
-litdata2ffcv /n/alvarez_lab_tier1/Users/alvarez/datasets/litdata/imagenet1k-litdata/streaming-s256-l512-jpgbytes-q100/val /n/alvarez_lab_tier1/Users/alvarez/datasets/ffcv/imagenet1k-s256-l512-jpgbytes-q100-val.ffcv 50000 --src_image_format jpgbytes --chunk_size 100 --shuffle_indices False
+generate_ffcv_dataset --root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/rawdata/imagenet1k --split val --write_path /n/alvarez_lab_tier1/Users/alvarez/datasets/ffcv/imagenet1k/imagenet1k-s256-l512-jpg-q100-val.ffcv -short_resize 256 --long_crop 512 --quality 100 --write_mode "jpg" --chunk_size 100 --num_expected 50000
 
+generate_ffcv_dataset --root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/rawdata/imagenet1k --split train --write_path /n/alvarez_lab_tier1/Users/alvarez/datasets/ffcv/imagenet1k/imagenet1k-s256-l512-jpg-q100-train.ffcv -short_resize 256 --long_crop 512 --quality 100 --write_mode "jpg" --chunk_size 100 --num_expected 1281167
 
 ```
 
