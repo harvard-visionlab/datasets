@@ -21,29 +21,25 @@ class SubFolderDataset(Dataset):
             transform (optional): Optional transform to apply to each image.
         """
         self.root_dir = root_dir
+        self.subfolders = '.' if subfolders is None else subfolders
         self.transform = transform
         self.loader = default_loader
+        
+        # Only include images from specified subfolders
+        self.classes = self.subfolders
+        self.class_to_idx = {cls_name: idx for idx, cls_name in enumerate(self.subfolders)}
+        self.samples = []
 
-        # Use specific subfolders or default to all subfolders
-        if subfolders is None:
-            # If no subfolders are specified, behave like ImageFolder
-            self.dataset = ImageFolder(root_dir, transform=transform)
-        else:
-            # Only include images from specified subfolders
-            self.classes = subfolders
-            self.class_to_idx = {cls_name: idx for idx, cls_name in enumerate(subfolders)}
-            self.samples = []
-
-            # Collect images from each specified subfolder
-            for cls_name in subfolders:
-                cls_dir = os.path.join(root_dir, cls_name)
-                if not os.path.isdir(cls_dir):
-                    continue
-                for root, _, fnames in sorted(os.walk(cls_dir)):
-                    for fname in sorted(fnames):
-                        path = os.path.join(root, fname)
-                        if is_image_file(path):
-                            self.samples.append((path, self.class_to_idx[cls_name]))
+        # Collect images from each specified subfolder
+        for cls_name in self.subfolders:
+            cls_dir = os.path.join(root_dir, cls_name)
+            if not os.path.isdir(cls_dir):
+                continue
+            for root, _, fnames in sorted(os.walk(cls_dir)):
+                for fname in sorted(fnames):
+                    path = os.path.join(root, fname)
+                    if is_image_file(path):
+                        self.samples.append((path, self.class_to_idx[cls_name]))
 
     def __len__(self):
         return len(self.samples)
@@ -62,6 +58,7 @@ class SubFolderDataset(Dataset):
         head = "SubFolderDataset"
         body = [f"Number of datapoints: {self.__len__()}"]
         body.append(f"root_dir: {self.root_dir}")
+        body.append(f"subfolders: {self.subfolders}")
             
         body += [f"\nTransforms on image:"]
         if hasattr(self, "transforms") and self.transforms is not None:
