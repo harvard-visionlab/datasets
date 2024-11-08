@@ -16,6 +16,16 @@ def get_signed_url(bucket_name, bucket_key, expires_in_seconds=3600, profile=os.
 def sign_url_if_needed(url):
     return auth.sign_url_if_needed(url)
 
+def get_aws_credentials(profile_name=None):
+    if profile_name is not None:
+        return get_credentials_by_profile(profile_name)
+    
+    return {
+        "aws_access_key_id": os.getenv('AWS_ACCESS_KEY_ID'),
+        "aws_secret_access_key": os.getenv('AWS_SECRET_ACCESS_KEY'),
+        "endpoint_url": os.getenv('AWS_ENDPOINT_URL', 'https://s3.amazonaws.com')
+    }
+
 def get_credentials_by_profile(profile_name):
     try:
         # Create a boto3 session with the specified profile

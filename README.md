@@ -33,9 +33,14 @@ list_datasets()
 list_datasets('ml/*')
 ```
 
-**list all neuroai datasets**:
+**list all neuro datasets**:
 ```
-list_datasets('neuroai/*')
+list_datasets('neuro/*')
+```
+
+**list all cognitive (behavioral) datasets**:
+```
+list_datasets('cog/*')
 ```
 
 **list all imagenet datasets**:
