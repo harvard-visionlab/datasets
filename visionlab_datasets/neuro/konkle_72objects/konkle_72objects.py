@@ -5,6 +5,7 @@ import scipy.io as sio
 from ...auth import get_aws_credentials
 from ...utils import download_s3_file
 from ...datasets import StreamingDatasetVisionlab
+from ...registry import dataset_registry
 
 s3_urls = {
     "STIMULI": "s3://visionlab-litdata/exploring-objects-images/",
@@ -47,17 +48,18 @@ class NeuralDataset():
         
         return "\n".join(lines)
     
-# Subclass for the "GRADIENT" dataset
+@dataset_registry.register("neuro", "konkle_72_objects", "SECTORS", "72 Inanimate Objects fMRI Betas by SECTOR (Konkle, )")
 class NeuralDatasetGradient(NeuralDataset):
     def __init__(self, profile_name='default'):
         super().__init__(dataset="GRADIENT", profile_name=profile_name)
 
-# Subclass for the "SECTORS" dataset (this could be the default)
+@dataset_registry.register("neuro", "konkle_72_objects", "GRADIENT", "72 Inanimate Objects fMRI Betas by GRADIENT ROI (Konkle, )")
 class NeuralDatasetSectors(NeuralDataset):
     def __init__(self, profile_name='default'):
         super().__init__(dataset="SECTORS", profile_name=profile_name)    
 
+@dataset_registry.register("neuro", "konkle_72_objects", "stimuli", "72 Inanimate Object Stimuli (PIL Images)")
 class StimulusDataset(StreamingDatasetVisionlab):
-    def __init__(self, profile_name='default'):
+    def __init__(self, profile_name='default', **kwargs):
         storage_options = get_aws_credentials(profile_name)
-        super().__init__(s3_urls['STIMULI'], storage_options=storage_options)
+        super().__init__(s3_urls['STIMULI'], storage_options=storage_options, **kwargs)
