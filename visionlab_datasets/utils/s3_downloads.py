@@ -63,10 +63,10 @@ def sync_bucket_to_local(bucket_url, cache_dir=None, profile_name=None, dryrun=F
 
     # Set cache directory if not provided
     if cache_dir is None:
-        cache_dir = get_cache_dir()
+        cache_dir = get_cache_dir(bucket_url)
 
     # Perform the folder download
-    download_folder(folder_key, os.path.join(cache_dir, bucket_name, folder_key), bucket_name, dryrun=dryrun)      
+    download_folder(folder_key, cache_dir, bucket_name, dryrun=dryrun)      
     
 def download_s3_file(s3_url, cache_dir=None, region='us-east-1', dryrun=False, profile_name=None):
     # Parse the bucket name and file key from the S3 URL
@@ -83,8 +83,8 @@ def download_s3_file(s3_url, cache_dir=None, region='us-east-1', dryrun=False, p
     if not is_public:
         # If private, retrieve AWS credentials using the helper
         creds = get_aws_credentials(profile_name)
-        if not creds["aws_access_key_id"] or not creds["aws_secret_access_key"]:
-            raise ValueError("AWS credentials are missing or incomplete.")
+        #if not creds["aws_access_key_id"] or not creds["aws_secret_access_key"]:
+        #    raise ValueError("AWS credentials are missing or incomplete.")
 
         # Initialize the S3 resource with credentials for private access
         s3 = boto3.resource(

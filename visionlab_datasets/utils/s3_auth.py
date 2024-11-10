@@ -1,20 +1,21 @@
 import os
 import boto3
+import warnings
 from botocore.exceptions import ProfileNotFound
 from botocore.configloader import load_config
 import requests
-from s3_filestore import auth
+# from s3_filestore import auth
     
-def get_signed_url(bucket_name, bucket_key, expires_in_seconds=3600, profile=os.environ.get('S3_PROFILE', None)):
-    s3_client = auth.get_client_with_userdata(profile)
-    signed_url = s3_client.generate_presigned_url('get_object', 
-                                                  Params={'Bucket': bucket_name, 'Key': bucket_key},
-                                                  ExpiresIn=expires_in_seconds,
-                                                  HttpMethod='GET')
-    return signed_url
+# def get_signed_url(bucket_name, bucket_key, expires_in_seconds=3600, profile=os.environ.get('S3_PROFILE', None)):
+#     s3_client = auth.get_client_with_userdata(profile)
+#     signed_url = s3_client.generate_presigned_url('get_object', 
+#                                                   Params={'Bucket': bucket_name, 'Key': bucket_key},
+#                                                   ExpiresIn=expires_in_seconds,
+#                                                   HttpMethod='GET')
+#     return signed_url
 
-def sign_url_if_needed(url):
-    return auth.sign_url_if_needed(url)
+# def sign_url_if_needed(url):
+#     return auth.sign_url_if_needed(url)
 
 def get_aws_credentials(profile_name=None):
     if profile_name is not None:
@@ -72,7 +73,7 @@ def is_object_public(s3_url, region='us-east-1'):
         return False
     
     except Exception as e:
-        print(f"Error getting ACL for {object_key} in {bucket_name}: {e}")
+        warnings.warn(f"Error getting ACL for {object_key} in {bucket_name}: {e}")
         return False
 
 def is_object_private(s3_url, region='us-east-1'):

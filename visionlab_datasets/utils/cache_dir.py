@@ -65,5 +65,6 @@ def get_cache_dir(source=None, cache_root=None, profile_name=None):
     elif scheme in ['https', 'http']:
         local_dir = os.path.join(cache_root, scheme, netloc, key)
     else:
-        local_dir = os.path.join(cache_root, 'mnt', netloc, key)        
+        key = os.path.abspath(key).lstrip("/")
+        local_dir = os.path.join(cache_root, 'mnt', netloc, key)
     return local_dir

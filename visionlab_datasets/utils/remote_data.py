@@ -98,4 +98,4 @@ def get_file_metadata(source, read_limit=8192, hash_length=32, profile_name=None
     unique_id = hasher.hexdigest()
     final_hash = unique_id[:hash_length] if hash_length else unique_id
     
-    return {'size': size, 'hash': final_hash if size > 0 else None, 'read_limit': read_limit}
+    return {'scheme': parsed.scheme, 'netloc': parsed.netloc, 'path': parsed.path, 'size': size, 'hash': final_hash if size > 0 else None, 'read_limit': read_limit}
