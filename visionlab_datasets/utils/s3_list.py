@@ -2,7 +2,7 @@ import os
 import sys
 import boto3
 from tqdm.notebook import tqdm
-from ..auth import get_aws_credentials
+from .s3_auth import get_aws_credentials
 from .cache_dir import get_cache_dir
 
 def list_bucket_folders(bucket_url, profile_name=None):

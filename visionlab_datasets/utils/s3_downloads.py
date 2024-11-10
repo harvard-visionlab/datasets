@@ -2,9 +2,8 @@ import os
 import sys
 import boto3
 from tqdm.notebook import tqdm
-from ..auth import get_aws_credentials
 from .cache_dir import get_cache_dir
-from .s3_helpers import is_object_public
+from .s3_auth import get_aws_credentials, is_object_public
 
 def download_folder(folder_key, target_directory, bucket_name, region='us-east-1', dryrun=False):
     if not folder_key.endswith('/'):

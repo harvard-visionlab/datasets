@@ -2,8 +2,7 @@ import os
 import contextlib
 import scipy.io as sio
 
-from ...auth import get_aws_credentials
-from ...utils import download_s3_file
+from ...utils import get_aws_credentials, download_s3_file
 from ...datasets import StreamingDatasetVisionlab
 from ...registry import dataset_registry
 

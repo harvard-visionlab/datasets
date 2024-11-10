@@ -7,10 +7,10 @@ tar_extensions = ['.tar', '.tar.gz', '.tgz']
 ffcv_extensions = ['.beton', '.ffcv']
 
 class DatasetSourceType(Enum):
-    S3 = "s3_uri"
-    HTTP = "http_url"
-    DIR = "directory"
-    FILE = "file"
+    S3_URI = "s3_uri"
+    HTTP_URL = "http_url"
+    OS_DIR = "os_directory"
+    OS_FILE = "is_file"
 
 class DatasetFileType(Enum):
     STREAMING = "litdata"
@@ -21,14 +21,14 @@ class DatasetFileType(Enum):
     
 def get_dataset_source_type(source):
     if source.startswith("s3://"):
-        return DatasetSourceType.S3
+        return DatasetSourceType.S3_URI
     elif source.startswith("http://") or source.startswith("https://"):
         return DatasetSourceType.HTTP
     else:
         if os.path.isdir(source):
-            return DatasetSourceType.DIR
+            return DatasetSourceType.OS_DIR
         elif os.path.isfile(source):
-            return DatasetSourceType.FILE
+            return DatasetSourceType.OS_FILE
         else:
             raise ValueError(f"Dataset source intepreted as directory or file, but can't be found: {source}")
             
@@ -57,8 +57,8 @@ def get_dataset_filetype(source):
         return DatasetFileType.FFCV
     elif (
         'litdata' in source
-        or (source_type == DatasetSourceType.DIR and os.path.isfile(os.path.join(source, 'index.json')))
-        or (source_type == DatasetSourceType.S3 and s3_file_exists(os.path.join(source, 'index.json')))
+        or (source_type == DatasetSourceType.OS_DIR and os.path.isfile(os.path.join(source, 'index.json')))
+        or (source_type == DatasetSourceType.S3_URI and s3_file_exists(os.path.join(source, 'index.json')))
     ):
         return DatasetFileType.STREAMING
     else:
