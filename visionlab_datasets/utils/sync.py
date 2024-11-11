@@ -13,6 +13,35 @@ from .cache_dir import get_cache_root, get_cache_dir
 from .s3_info import s3_file_exists, is_bucket_folder, is_streaming_dataset
 from .s3_downloads import sync_bucket_to_local, download_s3_file
 
+def rsync_single_file(source, destination, verbose=True):
+    """
+    Copy a single file from source to destination using rsync, with progress display.
+
+    Parameters:
+    source (str): The source file path.
+    destination (str): The destination file path (full path, including file name).
+    verbose (bool): If True, show rsync output in detail.
+
+    Returns:
+    None
+    """
+    # Ensure the destination directory exists
+    Path(destination).parent.mkdir(parents=True, exist_ok=True)
+
+    # Construct the rsync command with progress for a single file
+    rsync_command = ["rsync", "-av", "--progress", source, destination]
+
+    # Run the rsync command in a subprocess
+    try:
+        if verbose:
+            print(f"Copying from {source} to {destination} with rsync...")
+        result = subprocess.run(rsync_command, check=True, text=True)
+        if verbose:
+            print("Copy complete.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error occurred while copying file with rsync: {e}")
+        print(e.stderr)
+        
 def sync_directories(source, destination, delete=False, verbose=True):
     """
     Sync files from the source directory to the destination directory using rsync.
@@ -141,7 +170,7 @@ def sync_to_local_cache(source, cache_root=None, decompress=True, progress=True,
                 download_file(source, local_path)
             elif os.path.isfile(source):
                 print(f"==> copying from mnt location: {source} to cache_path {local_path}")
-                shutil.copy(source, local_path)
+                rsync_single_file(source, local_path)
         else:
             print(f"==> cache hit: {local_path}")
             

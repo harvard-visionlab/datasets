@@ -1,9 +1,12 @@
 import os
 import sys
 import boto3
+from pathlib import Path
 from tqdm.notebook import tqdm
 from .cache_dir import get_cache_dir
 from .s3_auth import get_aws_credentials, is_object_public
+
+from pdb import set_trace
 
 def download_folder(folder_key, target_directory, bucket_name, region='us-east-1', dryrun=False):
     if not folder_key.endswith('/'):
@@ -75,7 +78,12 @@ def download_s3_file(s3_url, cache_dir=None, region='us-east-1', dryrun=False, p
     # Set cache directory if not provided and construct target path
     if cache_dir is None:
         cache_dir = get_cache_dir()
-    target_path = os.path.join(cache_dir, bucket_name, file_key)
+    
+    if cache_dir.endswith(Path(file_key).name):
+        # looks like user provided full target_path
+        target_path = cache_dir
+    else:
+        target_path = os.path.join(cache_dir, bucket_name, file_key)
 
     # First, check if the object is public
     is_public = is_object_public(s3_url, region)
