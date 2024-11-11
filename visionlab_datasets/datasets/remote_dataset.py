@@ -2,6 +2,7 @@ from ..utils import sync_to_local_cache, has_keyword_arg
 from .source_types import get_source_format, DatasetFormat
 from .streaming_dataset import StreamingDatasetVisionlab
 from .ffcv_dataset import FFCVDataset
+from .filedir import FileDirDataset
 from .matfile import MatFileDataset
 from .pytorchfile import PyTorchFileDataset
 from .subfolder import SubFolderDataset
@@ -14,7 +15,7 @@ dataset_classes = {
     DatasetFormat.IMAGE_DIR: SubFolderDataset,
     DatasetFormat.MAT: MatFileDataset,
     DatasetFormat.PTH: PyTorchFileDataset,
-    # DatasetFormat.FILE_DIR: FileDirDataset,
+    DatasetFormat.FILE_DIR: FileDirDataset,
 }
 
 class RemoteDataset:
@@ -43,9 +44,10 @@ class RemoteDataset:
             /local_dir/local_dataset => cache_dir (~/.lightning/chunks/)        
     """
     
-    def __init__(self, source, cache_root=None, profile_name=None, region='us-east-1', **kwargs):
+    def __init__(self, source, dataset_cls=None, cache_root=None, profile_name=None, region='us-east-1', **kwargs):
         self.source = source
         self.cache_root = cache_root
+        self.dataset_cls = dataset_cls
         self.profile_name = profile_name
         self.local_path = self._sync_dataset(source, cache_root, profile_name, region)
         self.dataset = self._initialize_dataset(self.local_path, **kwargs)
@@ -57,14 +59,14 @@ class RemoteDataset:
     def _initialize_dataset(self, source, **kwargs):
         """Initializes and returns the appropriate dataset instance."""
         source = get_source_format(source)     
-        if type(source) not in dataset_classes:
+        if type(source) not in dataset_classes and self.dataset_cls is None:
             lines = [f'Dataset class not configured for this type: {type(source)}']
-            lines += ['See visionlab_datasets.remote_dataset.dataset_classes) for supported types.']
+            lines += ['See visionlab_datasets.remote_dataset.dataset_classes) for supported types, or pass `dataset_cls`']
             raise ValueError("\n".join(lines))
         
         print(f"==> Detected dataset format: {type(source)}")
-        dataset_cls = dataset_classes[type(source)]
-
+        dataset_cls = dataset_classes[type(source)] if self.dataset_cls is None else self.dataset_cls
+        
         if has_keyword_arg(dataset_cls, 'cache_dir'):
             return dataset_cls(source, cache_dir=self.cache_dir, **kwargs)
         else:

@@ -15,7 +15,11 @@ class MatFileDataset():
         else:
             data = {field: rawdata[field] for field in rawdata.keys() if not field.startswith("__")}
         
-        self.data = data            
+        keys = list(data.keys())
+        if self.fields and len(keys)==1:
+            self.data = data[keys[0]]
+        else:
+            self.data = data
         
     def __getitem__(self, index):
         return self.data[index]

@@ -73,11 +73,13 @@ def decompress_zipfile_if_needed(file_path, output_dir=None):
 
     return expected_extracted_folder
 
-def decompress_if_needed(file_path, output_dir=None):
+def decompress_if_needed(file_path, output_dir=None, ignore_non_archives=True):
     # Determine the file extension and call the appropriate decompression function
-    if file_path.endswith('.tar') or file_path.endswith('.tar.gz') or file_path.endswith('.tgz'):
+    if (not file_path.endswith('.pth.tar')) and (file_path.endswith('.tar') or file_path.endswith('.tar.gz') or file_path.endswith('.tgz')):
         return decompress_tarfile_if_needed(file_path, output_dir)
     elif file_path.endswith('.zip'):
         return decompress_zipfile_if_needed(file_path, output_dir)
+    elif ignore_non_archives:
+        return file_path
     else:
         raise ValueError("Unsupported file type. Only .tar, .tar.gz, .tgz, and .zip files are supported.")

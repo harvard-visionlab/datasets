@@ -1,5 +1,6 @@
 from .balanced_splits import BalancedSplits
 from .ffcv_dataset import FFCVDataset
+from .filedir import FileDirDataset
 from .source_types import (
     DatasetRemoteLocationType, DatasetFormat, 
     get_source_location, get_source_format, is_image_directory
