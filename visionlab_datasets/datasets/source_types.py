@@ -10,6 +10,7 @@ from torchvision.datasets.folder import is_image_file
 zip_extensions = ['.zip']
 tar_extensions = ['.tar', '.tar.gz', '.tgz']
 ffcv_extensions = ['.beton', '.ffcv']
+pth_extensions = ['.pth', '.pth.tar', '.pt']
 
 # source locations
 class S3_URI(str): pass
@@ -81,13 +82,15 @@ def get_source_format(source):
         return FFCV_FILE(source)   
     elif source.endswith('.mat'):
         return MAT_FILE(source)
+    elif any([source.endswith(ext) for ext in pth_extensions]):
+        return PTH_FILE(source)
     elif (
         'litdata' in source
         or (type(source_loc) == MNT_DIR and os.path.isfile(os.path.join(source, 'index.json')))
         or (type(source_loc) == S3_URI and s3_file_exists(os.path.join(source, 'index.json')))
     ):
         return STREAMING_DATASET(source)
-    elif any([source.endswith(ext) for ext in tar_extensions]):
+    elif any([source.endswith(ext) for ext in tar_extensions]) and not source.endswith(".pth.tar"):
         return TAR_FILE(source)
     elif any([source.endswith(ext) for ext in zip_extensions]):
         return ZIP_FILE(source)
@@ -96,7 +99,7 @@ def get_source_format(source):
             return IMAGE_DIR(source)
         return FILE_DIR(source) 
     else:
-        valid_keys = [k for k in DatasetSourceFormat.__dict__.keys() if not k.startswith("__")]
+        valid_keys = [k for k in DatasetFormat.__dict__.keys() if not k.startswith("__")]
         warnings.warn(f"Unknown dataset format for this source: {source}. Expected source to be one of {valid_keys}")
         return UNKNOWN(source)
 

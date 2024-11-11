@@ -178,7 +178,7 @@ def sync_to_local_cache(source, cache_root=None, decompress=True, progress=True,
         if local_path.endswith(".zip"):
             local_path = decompress_if_needed(local_path)
             
-        if local_path.endswith(".tar") or local_path.endswith(".tar.gz") or local_path.endswith(".tgz"):
+        if (not local_path.endswith(".pth.tar")) and local_path.endswith(".tar") or local_path.endswith(".tar.gz") or local_path.endswith(".tgz"):
             local_path = decompress_if_needed(local_path)
             
         return local_path

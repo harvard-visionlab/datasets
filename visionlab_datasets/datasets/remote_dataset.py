@@ -3,6 +3,7 @@ from .source_types import get_source_format, DatasetFormat
 from .streaming_dataset import StreamingDatasetVisionlab
 from .ffcv_dataset import FFCVDataset
 from .matfile import MatFileDataset
+from .pytorchfile import PyTorchFileDataset
 from .subfolder import SubFolderDataset
 
 from pdb import set_trace
@@ -12,7 +13,7 @@ dataset_classes = {
     DatasetFormat.FFCV: FFCVDataset,
     DatasetFormat.IMAGE_DIR: SubFolderDataset,
     DatasetFormat.MAT: MatFileDataset,
-    # DatasetFormat.PTH_FILE: PytorchFileDataset,
+    DatasetFormat.PTH: PyTorchFileDataset,
     # DatasetFormat.FILE_DIR: FileDirDataset,
 }
 
@@ -55,10 +56,10 @@ class RemoteDataset:
     
     def _initialize_dataset(self, source, **kwargs):
         """Initializes and returns the appropriate dataset instance."""
-        source = get_source_format(source)        
-        if type(source) == DatasetFormat.UNKNOWN:
-            lines = [f'Dataset format unknown for this source: {source}.']
-            lines += ['Make sure there is a dataset_cls for this format (see visionlab_datasets.remote_dataset.dataset_classes)']            
+        source = get_source_format(source)     
+        if type(source) not in dataset_classes:
+            lines = [f'Dataset class not configured for this type: {type(source)}']
+            lines += ['See visionlab_datasets.remote_dataset.dataset_classes) for supported types.']
             raise ValueError("\n".join(lines))
         
         print(f"==> Detected dataset format: {type(source)}")
