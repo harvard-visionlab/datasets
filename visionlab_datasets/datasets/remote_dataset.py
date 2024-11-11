@@ -2,6 +2,7 @@ from ..utils import sync_to_local_cache, has_keyword_arg
 from .source_types import get_source_format, DatasetFormat
 from .streaming_dataset import StreamingDatasetVisionlab
 from .ffcv_dataset import FFCVDataset
+from .matfile import MatFileDataset
 from .subfolder import SubFolderDataset
 
 from pdb import set_trace
@@ -10,7 +11,7 @@ dataset_classes = {
     DatasetFormat.STREAMING: StreamingDatasetVisionlab,
     DatasetFormat.FFCV: FFCVDataset,
     DatasetFormat.IMAGE_DIR: SubFolderDataset,
-    # DatasetFormat.MAT_FILE: MatFileDataset,
+    DatasetFormat.MAT: MatFileDataset,
     # DatasetFormat.PTH_FILE: PytorchFileDataset,
     # DatasetFormat.FILE_DIR: FileDirDataset,
 }
