@@ -132,20 +132,19 @@ def sync_to_local_cache(source, cache_root=None, decompress=True, progress=True,
         local_path = os.path.join(cache_root, metadata['hash'], filename)
         Path(local_path).parent.mkdir(parents=True, exist_ok=True)
         
-        # cache hit, return the path:
-        if os.path.exists(local_path):   
+        # cache miss, sync the data:
+        if not os.path.exists(local_path):   
+            # sync the data
+            if metadata['scheme'] == 's3':
+                download_s3_file(source, local_path, profile_name=profile_name, region=region)
+            elif metadata['scheme'] in ['http','https']:
+                download_file(source, local_path)
+            elif os.path.isfile(source):
+                print(f"==> copying from mnt location: {source} to cache_path {local_path}")
+                shutil.copy(source, local_path)
+        else:
             print(f"==> cache hit: {local_path}")
-            return local_path
-        
-        # sync the data
-        if metadata['scheme'] == 's3':
-            download_s3_file(source, local_path, profile_name=profile_name, region=region)
-        elif metadata['scheme'] in ['http','https']:
-            download_file(source, local_path)
-        elif os.path.isfile(source):
-            print(f"==> copying from mnt location: {source} to cache_path {local_path}")
-            shutil.copy(source, local_path)
-        
+            
         # decompress archives
         if local_path.endswith(".zip"):
             local_path = decompress_if_needed(local_path)

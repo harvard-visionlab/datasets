@@ -2,6 +2,13 @@ import os
 import zipfile
 import tarfile
 
+def get_top_level_directory_fast(file_path):
+    with tarfile.open(file_path, 'r:*') as tar:
+        for member in tar:
+            if '/' in member.name:
+                return member.name.split('/')[0]
+    return None
+
 def decompress_tarfile_if_needed(file_path, output_dir=None):
     # Check if the file exists
     if not os.path.exists(file_path):
