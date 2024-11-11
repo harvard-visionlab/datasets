@@ -33,7 +33,7 @@ class MAT_FILE(str): pass
 class PTH_FILE(str): pass
 class IMAGE_DIR(str): pass
 class FILE_DIR(str): pass
-class UNKOWN(str): pass
+class UNKNOWN(str): pass
 
 # define class tracking file formats
 class DatasetFormat:
@@ -45,7 +45,7 @@ class DatasetFormat:
     PTH = PTH_FILE
     IMAGE_DIR = IMAGE_DIR
     FILE_DIR = FILE_DIR
-    UNKOWN = UNKOWN
+    UNKNOWN = UNKNOWN
     
 def get_source_location(source):
     if source.startswith("s3://"):
@@ -98,7 +98,7 @@ def get_source_format(source):
     else:
         valid_keys = [k for k in DatasetSourceFormat.__dict__.keys() if not k.startswith("__")]
         warnings.warn(f"Unknown dataset format for this source: {source}. Expected source to be one of {valid_keys}")
-        return UNKOWN(source)
+        return UNKNOWN(source)
 
 def is_image_directory(root_dir):
     """

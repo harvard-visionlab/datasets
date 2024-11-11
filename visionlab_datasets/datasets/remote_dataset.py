@@ -6,10 +6,13 @@ from .subfolder import SubFolderDataset
 
 from pdb import set_trace
 
-datasets = {
+dataset_classes = {
     DatasetFormat.STREAMING: StreamingDatasetVisionlab,
     DatasetFormat.FFCV: FFCVDataset,
     DatasetFormat.IMAGE_DIR: SubFolderDataset,
+    # DatasetFormat.MAT_FILE: MatFileDataset,
+    # DatasetFormat.PTH_FILE: PytorchFileDataset,
+    # DatasetFormat.FILE_DIR: FileDirDataset,
 }
 
 class RemoteDataset:
@@ -51,10 +54,15 @@ class RemoteDataset:
     
     def _initialize_dataset(self, source, **kwargs):
         """Initializes and returns the appropriate dataset instance."""
-        source = get_source_format(source)
-        print(f"==> Detected dataset format: {type(source)}")
-        dataset_cls = datasets[type(source)]
+        source = get_source_format(source)        
+        if type(source) == DatasetFormat.UNKNOWN:
+            lines = [f'Dataset format unknown for this source: {source}.']
+            lines += ['Make sure there is a dataset_cls for this format (see visionlab_datasets.remote_dataset.dataset_classes)']            
+            raise ValueError("\n".join(lines))
         
+        print(f"==> Detected dataset format: {type(source)}")
+        dataset_cls = dataset_classes[type(source)]
+
         if has_keyword_arg(dataset_cls, 'cache_dir'):
             return dataset_cls(source, cache_dir=self.cache_dir, **kwargs)
         else:
