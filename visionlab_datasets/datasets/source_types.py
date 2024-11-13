@@ -1,7 +1,6 @@
 import os
 import warnings
 from typing import Any, Optional
-from fastcore.dispatch import typedispatch
 from enum import Enum
 from pdb import set_trace
 from urllib.parse import urlparse

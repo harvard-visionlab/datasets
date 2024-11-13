@@ -1,7 +1,8 @@
+import warnings
+
 from ..utils import sync_to_local_cache, has_keyword_arg
 from .source_types import get_source_format, DatasetFormat
 from .streaming_dataset import StreamingDatasetVisionlab
-from .ffcv_dataset import FFCVDataset
 from .filedir import FileDirDataset
 from .matfile import MatFileDataset
 from .pytorchfile import PyTorchFileDataset
@@ -10,14 +11,20 @@ from .subfolder import SubFolderDataset
 from pdb import set_trace
 
 dataset_classes = {
-    DatasetFormat.STREAMING: StreamingDatasetVisionlab,
-    DatasetFormat.FFCV: FFCVDataset,
-    DatasetFormat.IMAGE_DIR: SubFolderDataset,
-    DatasetFormat.MAT: MatFileDataset,
-    DatasetFormat.PTH: PyTorchFileDataset,
-    DatasetFormat.FILE_DIR: FileDirDataset,
-}
+        DatasetFormat.STREAMING: StreamingDatasetVisionlab,
+        
+        DatasetFormat.IMAGE_DIR: SubFolderDataset,
+        DatasetFormat.MAT: MatFileDataset,
+        DatasetFormat.PTH: PyTorchFileDataset,
+        DatasetFormat.FILE_DIR: FileDirDataset,
+    }
 
+try:
+    from .ffcv_dataset import FFCVDataset
+    dataset_classes[DatasetFormat.FFCV] = FFCVDataset
+except:
+    warnings.warn("FFCV not installed, will be unable to use ffcv datasets. Ignore this warning if you are not using ffcv.")
+    
 class RemoteDataset:
     """Abstract base class for datasets loaded from remote sources.
         

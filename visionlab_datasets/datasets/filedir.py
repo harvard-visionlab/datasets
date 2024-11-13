@@ -1,10 +1,10 @@
 import os
+import warnings
 from pathlib import Path
 from pdb import set_trace
 
 from .source_types import get_source_format, DatasetFormat
 from .streaming_dataset import StreamingDatasetVisionlab
-from .ffcv_dataset import FFCVDataset
 from .matfile import MatFileDataset
 from .pytorchfile import PyTorchFileDataset
 from .subfolder import SubFolderDataset
@@ -12,11 +12,16 @@ from ..utils.archive_helpers import decompress_if_needed
 
 dataset_classes = {
     DatasetFormat.STREAMING: StreamingDatasetVisionlab,
-    DatasetFormat.FFCV: FFCVDataset,
     DatasetFormat.IMAGE_DIR: SubFolderDataset,
     DatasetFormat.MAT: MatFileDataset,
     DatasetFormat.PTH: PyTorchFileDataset,
 }
+
+try: 
+    from .ffcv_dataset import FFCVDataset
+    dataset_classes[DatasetFormat.FFCV] = FFCVDataset
+except:
+    warnings.warn("FFCV not installed, will be unable to use ffcv datasets. Ignore this warning if you are not using ffcv.")
 
 class FileDirDataset():
     def __init__(self, local_files):
