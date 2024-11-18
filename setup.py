@@ -8,7 +8,7 @@ with open("visionlab_datasets/version.py") as fp:
     exec(fp.read(), version)
 
 setup(
-    name="datasets",
+    name="visionlab_datasets",
     version=version['__version__'],
     author="George Alvarez",
     author_email="alvarez@wjh.harvard.edu",
