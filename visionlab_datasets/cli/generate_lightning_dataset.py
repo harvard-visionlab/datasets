@@ -2,10 +2,14 @@
     script for generating a lightning streaming dataset
     
     Example:
-    generate_lightning_dataset --root_dir /n/holyscratch01/alvarez_lab/Lab/datasets/ecoset --split val --output_root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/ecoset-litdata -short_resize 256 --long_crop 512 --quality 100 --image_format "jpgbytes" --chunk_bytes "64MB" --num_expected 
+    generate_lightning_dataset from_folder --root_dir /n/holyscratch01/alvarez_lab/Lab/datasets/ecoset --split val --output_root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/ecoset-litdata -short_resize 256 --long_crop 512 --quality 100 --image_format "jpgbytes" --chunk_bytes "64MB" --num_expected 
+    
+    Example: Hugging Face dataset
+    generate_lightning_dataset from_hugging_face --source axiong/imagenet-r --split test --output_root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/imagenet-r-litdata --quality 100 --image_format "PILImage" --chunk_bytes "64MB" --num_expected 30000
     
 '''
 import os, io
+import argparse
 import fire
 from pathlib import Path
 from litdata import optimize
@@ -21,6 +25,9 @@ format_mapping = {
     "webpbytes": "WEBP",
     "PILImage": "PIL"
 }
+
+parser = argparse.ArgumentParser(description='Generate LitData streaming dataset')
+FLAGS, FIRE_FLAGS = parser.parse_known_args()
 
 # ===============================================================
 #  Dataset Wrappers
@@ -142,8 +149,42 @@ def get_sample(item, transform=None, image_format="jpgbytes", quality=100):
 
     return data
     
-def generate_dataset(root_dir, split, output_root_dir, short_resize=None, long_crop=None, quality=100, 
-                     image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None):
+def _get_output_dir(split, output_root_dir, image_format, short_resize, long_crop, quality):
+    # make sure image_format is supported
+    assert image_format in format_mapping, f"Expected format to be in: {format_mapping}, got {image_format}" 
+    
+    # set output directory based on args
+    if short_resize is not None and long_crop is not None:
+        folder_name = f"streaming-s{short_resize}-l{long_crop}-{image_format}"
+    else:
+        folder_name = f"streaming-{image_format}"
+    
+    if quality is not None:
+        folder_name += f"-q{quality}"
+        
+    output_dir = os.path.join(output_root_dir, folder_name, split)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def _get_transform(convert_to_rgb, short_resize, long_crop):
+    # setup transforms
+    transform_list = []
+    if convert_to_rgb:
+        transform_list += [ConvertToRGB()]
+    
+    if short_resize is not None and long_crop is not None:
+        transform_list += [ResizeShortWithMaxLong(int(short_resize), int(long_crop))]
+    elif short_resize is not None:
+        transform_list += [transforms.Resize(short_size)]
+    elif long_crop is not None:
+        raise ValueError('You must provide a short_resize value to use long_crop')
+                         
+    transform = transforms.Compose(transform_list)
+    
+    return transform
+
+def from_folder(root_dir, split, output_root_dir, short_resize=None, long_crop=None, quality=100, 
+                image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None):
     
     # make sure image_format is supported
     assert image_format in format_mapping, f"Expected format to be in: {format_mapping}, got {image_format}" 
@@ -153,7 +194,7 @@ def generate_dataset(root_dir, split, output_root_dir, short_resize=None, long_c
     output_dir = os.path.join(output_root_dir, folder_name, split)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # load dataset
+    # load dataset  
     if "imagenet1k" in root_dir:
         dataset = ImageNet1k(root_dir, split=split)
     else:
@@ -177,7 +218,7 @@ def generate_dataset(root_dir, split, output_root_dir, short_resize=None, long_c
                          
     transform = transforms.Compose(transform_list)
     get_sample_fun = partial(get_sample, transform=transform, image_format=image_format, quality=quality)
-    
+        
     # store images into the chunks
     optimize(
         fn=get_sample_fun,  # The function applied over each input.
@@ -186,9 +227,40 @@ def generate_dataset(root_dir, split, output_root_dir, short_resize=None, long_c
         num_workers=len(os.sched_getaffinity(0)) - 1,  # The number of workers. The inputs are distributed among them.
         chunk_bytes=chunk_bytes # The maximum number of bytes to write into a chunk.
     )
+
+def apply_transform(transform, sample):
+    for k,vlist in sample.items():
+        sample[k] = [transform(v) if isinstance(v, Image.Image) else v for v in vlist]
+    return sample
     
+def get_dataset_sample(dataset, index):
+    return dataset[index]
+
+def from_hugging_face(source, split, output_root_dir, short_resize=None, long_crop=None, quality=100, 
+                      image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None):
+    from datasets import load_dataset
+    
+    output_dir = _get_output_dir(split, output_root_dir, image_format, short_resize, long_crop, quality)
+    print(output_dir)
+    dataset = load_dataset(source, split=split)
+    print(dataset)
+    
+    transform = _get_transform(convert_to_rgb, short_resize, long_crop)
+    
+    dataset.set_transform(partial(apply_transform, transform))
+    generator = partial(get_dataset_sample, dataset)
+
+    inputs = list(range(len(dataset)))
+    optimize(
+        fn=generator,  # The function applied over each input.
+        inputs=inputs,  # Provide any inputs. The fn is applied on each item.
+        output_dir=output_dir,  # The directory where the optimized data are stored.
+        num_workers=len(os.sched_getaffinity(0)) - 1,  # The number of workers. The inputs are distributed among them.
+        chunk_bytes=chunk_bytes # The maximum number of bytes to write into a chunk.
+    )
+        
 def main():
-    fire.Fire(generate_dataset)
+    fire.Fire(command=FIRE_FLAGS)
 
 if __name__ == '__main__':
-    fire.Fire(generate_dataset)    
+    fire.Fire(command=FIRE_FLAGS)
