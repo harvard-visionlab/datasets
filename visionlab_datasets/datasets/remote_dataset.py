@@ -4,6 +4,7 @@ from ..utils import sync_to_local_cache, has_keyword_arg
 from .source_types import get_source_format, DatasetFormat
 from .streaming_dataset import StreamingDatasetVisionlab
 from .filedir import FileDirDataset
+from .jsonfile import JSONFileDataset
 from .matfile import MatFileDataset
 from .pytorchfile import PyTorchFileDataset
 from .subfolder import SubFolderDataset
@@ -12,10 +13,10 @@ from pdb import set_trace
 
 dataset_classes = {
         DatasetFormat.STREAMING: StreamingDatasetVisionlab,
-        
         DatasetFormat.IMAGE_DIR: SubFolderDataset,
         DatasetFormat.MAT: MatFileDataset,
         DatasetFormat.PTH: PyTorchFileDataset,
+        DatasetFormat.JSON: JSONFileDataset,
         DatasetFormat.FILE_DIR: FileDirDataset,
     }
 

@@ -31,6 +31,7 @@ class ZIP_FILE(str): pass
 class TAR_FILE(str): pass
 class MAT_FILE(str): pass
 class PTH_FILE(str): pass
+class JSON_FILE(str): pass
 class IMAGE_DIR(str): pass
 class FILE_DIR(str): pass
 class UNKNOWN(str): pass
@@ -43,6 +44,7 @@ class DatasetFormat:
     TAR = TAR_FILE
     MAT = MAT_FILE
     PTH = PTH_FILE
+    JSON = JSON_FILE
     IMAGE_DIR = IMAGE_DIR
     FILE_DIR = FILE_DIR
     UNKNOWN = UNKNOWN
@@ -81,6 +83,8 @@ def get_source_format(source):
         return FFCV_FILE(source)   
     elif source.endswith('.mat'):
         return MAT_FILE(source)
+    elif source.endswith('.json'):
+        return JSON_FILE(source)
     elif any([source.endswith(ext) for ext in pth_extensions]):
         return PTH_FILE(source)
     elif (
