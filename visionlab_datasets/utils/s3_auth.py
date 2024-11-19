@@ -73,8 +73,12 @@ def is_object_public(s3_url, region='us-east-1'):
         return False
     
     except Exception as e:
-        warnings.warn(f"Error getting ACL for {object_key} in {bucket_name}: {e}")
-        return False
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            # Suppress warning for expected "key not found" error
+            return False
+        else:
+            warnings.warn(f"Error getting ACL for {object_key} in {bucket_name}: {e}")
+            return False
 
 def is_object_private(s3_url, region='us-east-1'):
     return not is_object_public(s3_url, region)    

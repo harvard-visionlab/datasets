@@ -5,7 +5,7 @@
     generate_lightning_dataset from_folder --root_dir /n/holyscratch01/alvarez_lab/Lab/datasets/ecoset --split val --output_root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/ecoset-litdata -short_resize 256 --long_crop 512 --quality 100 --image_format "jpgbytes" --chunk_bytes "64MB" --num_expected 
     
     Example: Hugging Face dataset
-    generate_lightning_dataset from_hugging_face --source axiong/imagenet-r --split test --output_root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/imagenet-r-litdata --quality 100 --image_format "PILImage" --chunk_bytes "64MB" --num_expected 30000
+    generate_lightning_dataset from_hugging_face --source axiong/imagenet-r --split test --output_root_dir /n/alvarez_lab_tier1/Users/alvarez/datasets/imagenet-r-litdata --quality 100 --image_format "PILImage" --chunk_bytes "128MB" --num_expected 30000 --label_map_name wnid_to_idx --label_map_field wnid
     
 '''
 import os, io
@@ -19,6 +19,8 @@ from typing import Any, Tuple
 from functools import partial
 from pdb import set_trace
 
+from ..datasets import RemoteDataset
+
 format_mapping = {
     "jpgbytes": "JPEG",
     "pngbytes": "PNG",
@@ -28,6 +30,27 @@ format_mapping = {
 
 parser = argparse.ArgumentParser(description='Generate LitData streaming dataset')
 FLAGS, FIRE_FLAGS = parser.parse_known_args()
+
+# ===============================================================
+#  LabelMappers
+# ===============================================================
+
+class WnidToIdxMapper:
+    def __init__(self, dataset_path="s3://visionlab-datasets/imagenet1k-raw/wnid_to_idx.json", label_map_field="wnid"):
+        self.dataset_path = dataset_path
+        self.wnid_to_index_mapper = None
+        self.label_map_field = label_map_field
+        
+    def __call__(self, sample, label_map_field="wnid"):
+        if self.wnid_to_index_mapper is None:
+            # Initialize only once
+            self.wnid_to_index_mapper = RemoteDataset(self.dataset_path)
+        wnid = sample[self.label_map_field]
+        return self.wnid_to_index_mapper[wnid]
+
+MAPPERS = {
+    "wnid_to_idx": WnidToIdxMapper,
+}
 
 # ===============================================================
 #  Dataset Wrappers
@@ -233,11 +256,15 @@ def apply_transform(transform, sample):
         sample[k] = [transform(v) if isinstance(v, Image.Image) else v for v in vlist]
     return sample
     
-def get_dataset_sample(dataset, index):
-    return dataset[index]
+def get_dataset_sample(dataset, index, label_map=None):
+    sample = dataset[index]
+    if label_map is not None:
+        sample['label'] = label_map(sample)
+    return sample
 
 def from_hugging_face(source, split, output_root_dir, short_resize=None, long_crop=None, quality=100, 
-                      image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None):
+                      image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None,
+                      label_map_name=None, label_map_field=None):
     from datasets import load_dataset
     
     output_dir = _get_output_dir(split, output_root_dir, image_format, short_resize, long_crop, quality)
@@ -246,9 +273,15 @@ def from_hugging_face(source, split, output_root_dir, short_resize=None, long_cr
     print(dataset)
     
     transform = _get_transform(convert_to_rgb, short_resize, long_crop)
-    
     dataset.set_transform(partial(apply_transform, transform))
-    generator = partial(get_dataset_sample, dataset)
+    
+    # label_map (some datasets need the imagenet labels to be added)
+    if label_map_name is not None:
+        label_map = MAPPERS[label_map_name](label_map_field=label_map_field)
+    else: 
+        label_map = None
+        
+    generator = partial(get_dataset_sample, dataset, label_map=label_map)
 
     inputs = list(range(len(dataset)))
     optimize(
