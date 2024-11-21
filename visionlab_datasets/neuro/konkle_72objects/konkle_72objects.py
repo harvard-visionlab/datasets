@@ -15,7 +15,7 @@ s3_urls = {
 __all__ = ['NeuralDatasetSectors', 'NeuralDatasetGradient', 'StimulusDataset']
 
 class NeuralDataset():
-    def __init__(self, dataset="SECTORS", profile_name='default'):
+    def __init__(self, dataset="SECTORS", profile_name=None):
         self.dataset = dataset
         self.remote_file = s3_urls[dataset]
         # Suppress print output from download_s3_file
@@ -49,16 +49,16 @@ class NeuralDataset():
     
 @dataset_registry.register("neuro", "konkle_72_objects", "SECTORS", "72 Inanimate Objects fMRI Betas by SECTOR (Konkle, )")
 class NeuralDatasetGradient(NeuralDataset):
-    def __init__(self, profile_name='default'):
+    def __init__(self, profile_name=None):
         super().__init__(dataset="GRADIENT", profile_name=profile_name)
 
 @dataset_registry.register("neuro", "konkle_72_objects", "GRADIENT", "72 Inanimate Objects fMRI Betas by GRADIENT ROI (Konkle, )")
 class NeuralDatasetSectors(NeuralDataset):
-    def __init__(self, profile_name='default'):
+    def __init__(self, profile_name=None):
         super().__init__(dataset="SECTORS", profile_name=profile_name)    
 
 @dataset_registry.register("neuro", "konkle_72_objects", "stimuli", "72 Inanimate Object Stimuli (PIL Images)")
 class StimulusDataset(StreamingDatasetVisionlab):
-    def __init__(self, profile_name='default', **kwargs):
+    def __init__(self, profile_name=None, **kwargs):
         storage_options = get_aws_credentials(profile_name)
         super().__init__(s3_urls['STIMULI'], storage_options=storage_options, **kwargs)

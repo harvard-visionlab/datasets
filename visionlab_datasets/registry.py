@@ -1,17 +1,11 @@
 import fnmatch
+from pdb import set_trace
 
 class DatasetRegistry:
     def __init__(self):
         self.datasets = {}
         self.metadata = {}
-    # def register(self, category, name, split, description=""):
-    #     """Register a dataset with a given name and category."""
-    #     if category not in self.datasets:
-    #         self.datasets[category] = {}
-    #     if name not in self.datasets[category]:
-    #         self.datasets[category][name] = {}
-    #     self.datasets[category][name][split] = description
-    
+        
     def register(self, category, name, split, metadata=""):
         """Register a dataset with a given name and category as a decorator or callable."""
         def decorator(cls):

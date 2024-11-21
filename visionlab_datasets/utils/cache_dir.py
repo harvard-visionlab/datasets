@@ -1,5 +1,6 @@
 import os
 import warnings
+from torch.hub import _get_torch_home
 from enum import Enum
 from pathlib import Path
 from collections import OrderedDict
@@ -8,7 +9,7 @@ from urllib.parse import urlparse
 
 from .s3_auth import get_aws_credentials
 
-_DEFAULT_STUDIO_CACHEDIR = "/teamspace/cache/datasets/"
+_DEFAULT_STUDIO_CACHEDIR = _get_torch_home().replace("/torch", "/datasets")
 _DEFAULT_DIRS=OrderedDict([
     ('NETSCRATCH', "/n/netscratch/alvarez_lab/Lab/datasets/cache"),
     ('TIER1', "/n/alvarez_lab_tier1/Lab/datasets/cache"),
@@ -39,7 +40,9 @@ def check_platform():
 def get_cache_root():
     platform = check_platform()
     if platform == Platform.LIGHTNING_STUDIO:
-        return os.getenv('STUDIO_CACHE', _DEFAULT_STUDIO_CACHEDIR)
+        cache_root = os.getenv('STUDIO_CACHE', _DEFAULT_STUDIO_CACHEDIR)
+        Path(cache_root).mkdir(parents=True, exist_ok=True)
+        return cache_root
     else:
         for folder in _DEFAULT_DIRS.values():
             if os.path.exists(folder):

@@ -87,10 +87,11 @@ def download_s3_file(s3_url, cache_dir=None, region='us-east-1', dryrun=False, p
 
     # First, check if the object is public
     is_public = is_object_public(s3_url, region)
-
+    
     if not is_public:
         # If private, retrieve AWS credentials using the helper
         creds = get_aws_credentials(profile_name)
+        
         #if not creds["aws_access_key_id"] or not creds["aws_secret_access_key"]:
         #    raise ValueError("AWS credentials are missing or incomplete.")
 

@@ -1,26 +1,19 @@
 import os
 import boto3
+import requests
 import warnings
 from botocore.exceptions import ProfileNotFound
 from botocore.configloader import load_config
 import requests
-# from s3_filestore import auth
-    
-# def get_signed_url(bucket_name, bucket_key, expires_in_seconds=3600, profile=os.environ.get('S3_PROFILE', None)):
-#     s3_client = auth.get_client_with_userdata(profile)
-#     signed_url = s3_client.generate_presigned_url('get_object', 
-#                                                   Params={'Bucket': bucket_name, 'Key': bucket_key},
-#                                                   ExpiresIn=expires_in_seconds,
-#                                                   HttpMethod='GET')
-#     return signed_url
 
-# def sign_url_if_needed(url):
-#     return auth.sign_url_if_needed(url)
+from pdb import set_trace
 
 def get_aws_credentials(profile_name=None):
     if profile_name is not None:
-        return get_credentials_by_profile(profile_name)
-    
+        creds = get_credentials_by_profile(profile_name)
+        if creds is not None:
+            return creds
+            
     return {
         "aws_access_key_id": os.getenv('AWS_ACCESS_KEY_ID'),
         "aws_secret_access_key": os.getenv('AWS_SECRET_ACCESS_KEY'),
@@ -53,32 +46,57 @@ def get_credentials_by_profile(profile_name):
         print(f"Profile '{profile_name}' not found.")
         return None
 
-def is_object_public(s3_url, region='us-east-1'):
-    bucket_name, _, object_key = s3_url.strip("s3://").partition('/')
+def is_object_public(s3_path, endpoint_url="https://s3.amazonaws.com"):
+    """
+    Check if an S3 object is public and exists.
+    
+    Args:
+        s3_path (str): S3 URI (e.g., s3://bucket-name/object-key) or public S3 URL (e.g., https://bucket-name.s3.amazonaws.com/object-key).
+        
+    Returns:
+        bool: True if the object exists and is publicly accessible, False otherwise.
+    """
+    # Convert S3 URI to public S3 URL
+    if s3_path.startswith("s3://"):
+        bucket_name, _, object_key = s3_path.replace("s3://", "").partition('/')
+        s3_url = f"{endpoint_url}/{bucket_name}/{object_key}"
+    else:
+        s3_url = s3_path  # Assume it's already a public URL
     
     try:
-        # Create an S3 client
-        s3_client = boto3.client('s3', region_name=region)
-        
-        # Get the ACL of the object
-        acl = s3_client.get_object_acl(Bucket=bucket_name, Key=object_key)
-        
-        # Check if the ACL grants public read access
-        for grant in acl['Grants']:
-            grantee = grant.get('Grantee', {})
-            permission = grant.get('Permission')
-            if grantee.get('URI') == 'http://acs.amazonaws.com/groups/global/AllUsers' and permission == 'READ':
-                return True
-        
+        # Perform a HEAD request to check if the object is public
+        response = requests.head(s3_url)
+        return response.status_code == 200
+    except requests.RequestException as e:
+        print(f"Error checking object: {e}")
         return False
+        
+# def is_object_public(s3_url, region='us-east-1'):
+#     bucket_name, _, object_key = s3_url.strip("s3://").partition('/')
     
-    except Exception as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
-            # Suppress warning for expected "key not found" error
-            return False
-        else:
-            warnings.warn(f"Error getting ACL for {object_key} in {bucket_name}: {e}")
-            return False
+#     try:
+#         # Create an S3 client
+#         s3_client = boto3.client('s3', region_name=region)
+        
+#         # Get the ACL of the object
+#         acl = s3_client.get_object_acl(Bucket=bucket_name, Key=object_key)
+        
+#         # Check if the ACL grants public read access
+#         for grant in acl['Grants']:
+#             grantee = grant.get('Grantee', {})
+#             permission = grant.get('Permission')
+#             if grantee.get('URI') == 'http://acs.amazonaws.com/groups/global/AllUsers' and permission == 'READ':
+#                 return True
+        
+#         return False
+    
+#     except Exception as e:
+#         if e.response['Error']['Code'] == 'NoSuchKey':
+#             # Suppress warning for expected "key not found" error
+#             return False
+#         else:
+#             warnings.warn(f"Error getting ACL for {object_key} in {bucket_name}: {e}")
+#             return False
 
 def is_object_private(s3_url, region='us-east-1'):
     return not is_object_public(s3_url, region)    
