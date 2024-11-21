@@ -18,6 +18,12 @@ from torchvision import datasets, transforms
 from typing import Any, Tuple
 from functools import partial
 from pdb import set_trace
+from fastprogress import progress_bar
+import traceback
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 from ..datasets import RemoteDataset
 
@@ -48,8 +54,18 @@ class WnidToIdxMapper:
         wnid = sample[self.label_map_field]
         return self.wnid_to_index_mapper[wnid]
 
+class ParentFolderIndexMapper:
+    def __init__(self, label_map_field='path'):
+        self.label_map_field = label_map_field
+        
+    def __call__(self, sample):
+        path = sample[self.label_map_field]
+        label = int(Path(path).parent.name)
+        return label
+    
 MAPPERS = {
     "wnid_to_idx": WnidToIdxMapper,
+    "parent_folder": ParentFolderIndexMapper,
 }
 
 # ===============================================================
@@ -147,11 +163,19 @@ class ResizeShortWithMaxLong():
 # ===============================================================
 
 # helper function that will be called by works with (path,label,index) tuples
-def get_sample(item, transform=None, image_format="jpgbytes", quality=100):
+def get_sample(item, transform=None, image_format="jpgbytes", quality=100, label_map=None):
     actual_format = format_mapping[image_format]
     path, label, index = item
-
-    img = Image.open(path)
+    
+    if label_map is not None:
+        label = label_map(dict(path=path, label=label, index=index))
+    
+    try:
+        img = Image.open(path)
+    except Exception as e:
+        logger.error(f"Failed to open image: {path}")
+        raise e
+   
     if transform is not None:
         img = transform(img)
 
@@ -162,12 +186,14 @@ def get_sample(item, transform=None, image_format="jpgbytes", quality=100):
         image = image_bytes.read()
     else:
         image = img
-
+    
+    relative_path = (os.path.sep).join(path.split(os.path.sep)[-4:])
+    
     data = {
-        "index": index,
+        "index": int(index),
         "image": image,
-        "label": label,
-        "path": path,
+        "label": int(label),
+        "path": str(relative_path),
     }
 
     return data
@@ -207,22 +233,31 @@ def _get_transform(convert_to_rgb, short_resize, long_crop):
     return transform
 
 def from_folder(root_dir, split, output_root_dir, short_resize=None, long_crop=None, quality=100, 
-                image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None):
+                image_format="jpgbytes", chunk_bytes="64MB", convert_to_rgb=True, num_expected=None,
+                label_map_name=None, label_map_field=None):
     
     # make sure image_format is supported
     assert image_format in format_mapping, f"Expected format to be in: {format_mapping}, got {image_format}" 
     
     # set output directory based on args
     folder_name = f"streaming-s{short_resize}-l{long_crop}-{image_format}-q{quality}"
-    output_dir = os.path.join(output_root_dir, folder_name, split)
+    
+    if split is not None:
+        input_dir = os.path.join(root_dir, split)
+        output_dir = os.path.join(output_root_dir, folder_name, split)
+    else:
+        input_dir = root_dir
+        output_dir = os.path.join(output_root_dir, folder_name)
+        
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # load dataset  
     if "imagenet1k" in root_dir:
         dataset = ImageNet1k(root_dir, split=split)
     else:
-        dataset = ImageFolder(os.path.join(root_dir, split))
+        dataset = ImageFolder(input_dir)
     print(dataset)
+    
     if num_expected is not None:
         assert len(dataset)==num_expected, f"oops, expected {num_expected} samples, got {len(dataset)}"
     inputs = [(path,label,index) for index,(path,label) in enumerate(dataset.imgs)]
@@ -238,10 +273,17 @@ def from_folder(root_dir, split, output_root_dir, short_resize=None, long_crop=N
         transform_list += [transforms.Resize(short_size)]
     elif long_crop is not None:
         raise ValueError('You must provide a short_resize value to use long_crop')
-                         
-    transform = transforms.Compose(transform_list)
-    get_sample_fun = partial(get_sample, transform=transform, image_format=image_format, quality=quality)
         
+    transform = transforms.Compose(transform_list)
+    
+    # label_map (some datasets need the imagenet labels to be added)
+    if label_map_name is not None:
+        label_map = MAPPERS[label_map_name](label_map_field=label_map_field)
+    else: 
+        label_map = None
+
+    get_sample_fun = partial(get_sample, transform=transform, image_format=image_format, quality=quality, label_map=label_map)
+    
     # store images into the chunks
     optimize(
         fn=get_sample_fun,  # The function applied over each input.
@@ -293,7 +335,17 @@ def from_hugging_face(source, split, output_root_dir, short_resize=None, long_cr
     )
         
 def main():
-    fire.Fire(command=FIRE_FLAGS)
+    # fire.Fire(command=FIRE_FLAGS)
+    try:
+        fire.Fire(command=FIRE_FLAGS)
+    except Exception as e:
+        logger.error("An error occurred:")
+        traceback.print_exc()
 
 if __name__ == '__main__':
-    fire.Fire(command=FIRE_FLAGS)
+    try:
+        fire.Fire(command=FIRE_FLAGS)
+    except Exception as e:
+        logger.error("An error occurred:")
+        traceback.print_exc()
+    # fire.Fire(command=FIRE_FLAGS)
