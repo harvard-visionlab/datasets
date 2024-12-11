@@ -1,14 +1,58 @@
 import os
+import re
 import hashlib
 import boto3
 import requests
 from urllib.parse import urlparse
 from botocore.exceptions import ClientError
+from botocore import UNSIGNED
+from botocore.client import Config
 from pdb import set_trace
 
 from .s3_auth import get_aws_credentials, is_object_public
+from .s3_downloads import download_s3_file
 
-def get_file_metadata(source, read_limit=8192, hash_length=32, profile_name=None, region='us-east-1'):
+def fetch(source, cache_dir=None, endpoint_url=None, region='us-east-1', dryrun=False, profile_name=None):
+    
+    parsed = urlparse(source)
+    hasher = hashlib.sha256()
+
+    if parsed.scheme == "s3":
+        filepath = download_s3_file(source, 
+                                    cache_dir=cache_dir, 
+                                    endpoint_url=endpoint_url,
+                                    region=region, 
+                                    dryrun=dryrun, 
+                                    profile_name=profile_name)
+    elif parsed.scheme in ["http", "https"] and parsed.netloc.startswith("s3"):
+        endpoint_url, region = parse_s3_url(source)
+        filepath = download_s3_file(f"s3://{parsed.path[1:]}", 
+                                    cache_dir=cache_dir, 
+                                    endpoint_url=endpoint_url,
+                                    region=region, 
+                                    dryrun=dryrun, 
+                                    profile_name=profile_name)
+    elif parsed.scheme in ["http", "https"]:
+        set_trace()
+
+    return filepath
+
+def parse_s3_url(url):
+    parsed = urlparse(url)
+    parts = parsed.netloc.split(".")
+    if len(parts) == 3:
+        endpoint_url = f"https://{parsed.netloc}"
+        region = 'us-east-1'
+    elif len(parts) == 4:
+        region = parts.pop(1)
+        endpoint_url = "https://" + ".".join(parts)
+    else:
+        raise ValueError("Unexpected URL format: {}".format(url))
+        
+    return endpoint_url, region
+    
+def get_file_metadata(source, read_limit=8192, hash_length=32, profile_name=None,
+                      endpoint_url=None, region=None):
     """
     Retrieve file metadata, including size and unique identifier (content hash) based on the source.
     
@@ -31,12 +75,14 @@ def get_file_metadata(source, read_limit=8192, hash_length=32, profile_name=None
         key = parsed.path.lstrip('/')
 
         # Check if the S3 object is public
-        is_public = is_object_public(source, region)
+        creds = get_aws_credentials(profile_name)
+        if endpoint_url is None:
+            endpoint_url = creds["endpoint_url"]
+        if region is None:
+            region = creds["region"]
+        is_public = is_object_public(source, endpoint_url=endpoint_url, region=region)
 
         if not is_public:
-            # If private, retrieve AWS credentials using the helper
-            creds = get_aws_credentials(profile_name)
-
             # Initialize the S3 client with credentials for private access
             s3 = boto3.client(
                 's3',
@@ -48,7 +94,10 @@ def get_file_metadata(source, read_limit=8192, hash_length=32, profile_name=None
             )
         else:
             # Public access: Initialize the S3 client without credentials
-            s3 = boto3.client('s3', region_name=region)
+            s3 = boto3.client('s3', 
+                              region_name=region,
+                              endpoint_url=endpoint_url,
+                              config=Config(signature_version=UNSIGNED))
 
         # Get object metadata and partial content
         try:

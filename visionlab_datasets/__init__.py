@@ -1,21 +1,25 @@
+from .constants import *
 from .cog import *
 from .datasets import *
 from .ml_probe import *
-from .ml_training import *
+from .ml import *
 from .neuro import *
 from .utils import *
 from .version import *
 from .registry import dataset_registry
 
-dataset_types = ['ml_training', 'ml_probe', 'neuro', 'cog']
+from pdb import set_trace
 
-def load_dataset(source, split=None, **kwargs):
+dataset_types = ['ml', 'ml_probe', 'neuro', 'cog']
+
+def load_dataset(source, split=None, fmt=None, **kwargs):
     dataset_type, dataset_name = source.split("/")
     assert dataset_type in dataset_types, f"Dataset type should be in {dataset_types}, got {dataset_type}"
     
     splits = list(dataset_registry.datasets[dataset_type][dataset_name].keys())
     assert split in splits, f"Expected split to be in {splits}, got {split}"
-    dataset = dataset_registry.datasets[dataset_type][dataset_name][split](**kwargs)
+
+    dataset = dataset_registry.datasets[dataset_type][dataset_name][split][fmt](**kwargs)
     
     return dataset
 

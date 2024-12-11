@@ -1,3 +1,4 @@
+from .images import *
 
 formats = ["streaming", "ffcv", "images"]
 

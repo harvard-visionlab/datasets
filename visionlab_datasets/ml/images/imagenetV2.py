@@ -26,8 +26,8 @@ from torchvision import datasets
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
-from ..utils import get_remote_data_file, download_data_from_url, get_signed_s3_url
-from ..auth import sign_url_if_needed
+# from ..utils import get_remote_data_file, download_data_from_url, get_signed_s3_url
+# from ..auth import sign_url_if_needed
 
 from pdb import set_trace
 

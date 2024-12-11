@@ -17,7 +17,7 @@ garbage truck, gas pump, golf ball, parachute).
 '''
 import os
 from torchvision import datasets
-from ..utils import get_remote_data_file
+# from ..utils import get_remote_data_file
 
 __all__ = ['imagenette']
 

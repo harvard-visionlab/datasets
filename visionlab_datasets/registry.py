@@ -6,7 +6,7 @@ class DatasetRegistry:
         self.datasets = {}
         self.metadata = {}
         
-    def register(self, category, name, split, metadata=""):
+    def register(self, category, name, split, fmt=None, metadata=""):
         """Register a dataset with a given name and category as a decorator or callable."""
         def decorator(cls):
             # Initialize nested dictionaries in both datasets and metadata
@@ -19,8 +19,11 @@ class DatasetRegistry:
                 self.metadata[category][name] = {}
             
             # Store the class reference and description
-            self.datasets[category][name][split] = cls
-            self.metadata[category][name][split] = metadata
+            self.datasets[category][name][split] = {}
+            self.metadata[category][name][split] = {}
+            self.datasets[category][name][split][fmt] = cls
+            self.metadata[category][name][split][fmt] = metadata
+                
             return cls  # Return the class unmodified
         return decorator
     
@@ -31,11 +34,12 @@ class DatasetRegistry:
         # Flatten the datasets for pattern matching
         for category, datasets in self.datasets.items():
             for name, splits in datasets.items():
-                for split, metadata in splits.items():
-                    # Create a fully qualified name like 'ml/imagenet/train' or 'neuro/konkle_72_objects/GRADIENT'
-                    full_name = f"{category}/{name}/{split}"
-                    if fnmatch.fnmatch(full_name, pattern):
-                        matched_datasets.append((f"{category}/{name}", split, metadata))
+                for split, formats in splits.items():
+                    for fmt, metadata in formats.items():
+                        # Create a fully qualified name like 'ml/imagenet/train' or 'neuro/konkle_72_objects/GRADIENT'
+                        full_name = f"{category}/{name}/{split}/{fmt}"
+                        if fnmatch.fnmatch(full_name, pattern):
+                            matched_datasets.append((f"{category}/{name}", split, fmt, metadata))
         
         return matched_datasets
     

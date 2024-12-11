@@ -22,7 +22,8 @@ from torchvision import datasets
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
-from ..utils import get_remote_data_file, download_data_from_url, get_signed_s3_url
+from ...utils import fetch, decompress_if_needed
+from ...registry import dataset_registry
 
 from pdb import set_trace
 
@@ -30,10 +31,10 @@ __all__ = ['imagenet1k']
 
 # Private Datasets use s3_urls
 urls = {
-  ("val", "full"): "s3://visionlab-datasets/visionlab-datasets/imagenet1k/val.tar.gz",
+  ("val", "full"): "s3://visionlab-datasets/imagenet1k/val.tar.gz",
 }
 
-toolkit_url = "s3://visionlab-datasets/visionlab-datasets/imagenet1k/ILSVRC2012_devkit_t12.tar.gz"
+toolkit_url = "s3://visionlab-datasets/imagenet1k/ILSVRC2012_devkit_t12.tar.gz"
 
 hash_prefixes = {
     ("val", "full"): "2d0d90c3ab"
@@ -77,22 +78,23 @@ def download_toolkit_if_needed(root_folder):
             file_name = None,
         )
         print(cached_filename)
-    
-def imagenet1k(split, res=None, cache_dir=None, transform=None):
+
+def imagenet1k(split, res=None, cache_dir=None, transform=None, profile_name=None):
     if res is None: res = 'full'
     assert split in splits, f"Expected split to be in {splits}, got {split}"
     assert res in resolutions, f"Expected res to be one of {resolutions}, got {res}"
     url = urls[(split,res)]
     hash_prefix = hash_prefixes[(split,res)]
-    cached_filename, extracted_folder = get_remote_data_file(url, 
-                                                             hash_prefix=hash_prefix,
-                                                             cache_dir=cache_dir, 
-                                                             file_name=None, 
-                                                             check_hash=True)
-    
+
+    # download/decompress dataset
+    local_path = fetch(url, profile_name=profile_name)
+    extracted_folder = decompress_if_needed(local_path)
     root_folder = Path(extracted_folder).parent
-    download_toolkit_if_needed(root_folder)
-    
+
+    # make sure the toolkit is available
+    fetch(toolkit_url)
+
+    # instantiate dataset
     dataset = ImagNetIndex(root_folder, split=split, transform=transform)
     dataset.name = 'imagenet1k'
     dataset.split = split
@@ -103,4 +105,8 @@ def imagenet1k(split, res=None, cache_dir=None, transform=None):
     assert num_images==num_expected[split], f"Oops, expected {num_expected[split]} images, found {num_images}. Check the files at the dataset location: {extracted_folder}"
         
     return dataset
+
+@dataset_registry.register("ml", "imagenet1k", split="val", fmt="images", metadata="ImageNet1K JPEGs")
+def imagenet1k_val(**kwargs):
+    return imagenet1k("val", **kwargs)
   
