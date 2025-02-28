@@ -87,7 +87,7 @@ class FFCVDataset:
         
         body += [f"\nPipelines:"]
         for k,transforms in self.pipelines.items():
-            body += [f"{k}:{[v.__class__.__name__ for v in transforms] if v is not None else 'None'}"]
+            body += [f"{k}:{[v.__class__.__name__ for v in transforms] if transforms is not None else 'None'}"]
             
         lines = [head] + [" " * _repr_indent + line for line in body]
         
