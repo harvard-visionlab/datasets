@@ -17,7 +17,7 @@ pip install git+https://github.com/harvard-visionlab/datasets.git
 # Usage Examples
 
 ```
-from visionlab_datasets import load_dataset, list_datasets
+from visionlab.datasets import load_dataset, list_datasets
 ```
 
 ## list datasets
