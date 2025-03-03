@@ -12,7 +12,8 @@ __all__ = ['imagenet1k_val_streaming']
 # exclude the bucketname, use get_streaming_dirs to find the streaming dataset root
 # (which could be a mounted volume on lightning, or a remote bucket otherwise)
 bucket_locations_by_resolution_and_quality = {
-    (256, 100): ("imagenet1k-litdata/streaming-s256-l512-jpgbytes-q100", '1730021323.9057539'),
+    (256, 100): dict(prefix="imagenet1k/streaming-s256-l512-jpgbytes-q100",
+                     version=dict(val='1730021323.9057539', train="1741030773.04552"))
     # (256, 95): "imagenet1k-litdata/streaming-s256-l512-jpgbytes-q95"
 }
 
@@ -45,9 +46,10 @@ def imagenet1k(split, res=256, quality=100, transforms=None, profile_name=None, 
     assert quality in qualities, f"Expected quality to be one of {qualities}, got {quality}"
     
     # get the local and remote directories for this dataset:
-    bucket_path, expected_version = bucket_locations_by_resolution_and_quality[(res,quality)]
-    bucket_prefix = os.path.join(bucket_path, split)
+    info = bucket_locations_by_resolution_and_quality[(res,quality)]
+    bucket_prefix = os.path.join(info['prefix'], split)
     dirs = get_streaming_dirs(bucket_prefix)
+    expected_version = info['version'][split]
     
     if dirs['remote_dir'] is not None and dirs['remote_dir'].startswith("s3:"):
         aws_credentials = get_credentials_by_profile(profile_name)

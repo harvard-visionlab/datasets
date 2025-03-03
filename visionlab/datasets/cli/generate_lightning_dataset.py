@@ -25,7 +25,8 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-from ..datasets import RemoteDataset
+from visionlab.datasets.core import RemoteDataset
+from visionlab.datasets.utils import open_image
 
 format_mapping = {
     "jpgbytes": "JPEG",
@@ -253,9 +254,9 @@ def from_folder(root_dir, split, output_root_dir, short_resize=None, long_crop=N
 
     # load dataset  
     if "imagenet1k" in root_dir:
-        dataset = ImageNet1k(root_dir, split=split)
+        dataset = ImageNet1k(root_dir, split=split, loader=open_image)
     else:
-        dataset = ImageFolder(input_dir)
+        dataset = ImageFolder(input_dir, loader=open_image)
     print(dataset)
     
     if num_expected is not None:

@@ -31,6 +31,8 @@ setup(
             'check_dataset=visionlab.datasets.cli.check_dataset:main',
             'sync_dataset=visionlab.datasets.cli.sync_dataset:main',
             'generate_ffcv_dataset=visionlab.datasets.cli.generate_ffcv_dataset:main',
+            'litdata2ffcv=visionlab.datasets.cli.litdata2ffcv:main',
+            'rename_with_hash=visionlab.datasets.cli.rename_with_hash:main',
         ],
     },
 )
