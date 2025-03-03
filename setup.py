@@ -1,25 +1,23 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_namespace_packages
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
 version = {}
-with open("visionlab_datasets/version.py") as fp:
+with open("visionlab/datasets/version.py") as fp:
     exec(fp.read(), version)
 
 setup(
-    name="visionlab_datasets",
+    name="visionlab-datasets",
     version=version['__version__'],
     author="George Alvarez",
     author_email="alvarez@wjh.harvard.edu",
-    description="Datasets for neuro-ai research",
+    description="Datasets for cog-neuro-ai research",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/harvard-visionlab/datasets",
-    packages=find_packages(),
-    install_requires=[
-        # "s3-filestore @ git+https://github.com/harvard-visionlab/s3-filestore.git"
-    ],
+    packages=find_namespace_packages(include=["visionlab.*"]),
+    install_requires=[],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
@@ -28,12 +26,11 @@ setup(
     python_requires='>=3.6',
     entry_points={
         'console_scripts': [
-            'download_rawdata=visionlab_datasets.cli.download_rawdata:main',
-            'generate_lightning_dataset=visionlab_datasets.cli.generate_lightning_dataset:main',
-            'check_dataset=visionlab_datasets.cli.check_dataset:main',
-            'sync_dataset=visionlab_datasets.cli.sync_dataset:main',
-            # 'litdata2ffcv=visionlab_datasets.cli.litdata2ffcv:main',
-            'generate_ffcv_dataset=visionlab_datasets.cli.generate_ffcv_dataset:main',
+            'download_rawdata=visionlab.datasets.cli.download_rawdata:main',
+            'generate_lightning_dataset=visionlab.datasets.cli.generate_lightning_dataset:main',
+            'check_dataset=visionlab.datasets.cli.check_dataset:main',
+            'sync_dataset=visionlab.datasets.cli.sync_dataset:main',
+            'generate_ffcv_dataset=visionlab.datasets.cli.generate_ffcv_dataset:main',
         ],
     },
 )

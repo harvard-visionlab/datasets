@@ -14,7 +14,7 @@ S3_BUCKET = os.getenv('S3_LITDATA_BUCKET', 's3://visionlab-litdata/')
 STUDIO_CACHE = os.getenv('STUDIO_CACHE', "/teamspace/cache/datasets/")
 
 _DEFAULT_DIRS=OrderedDict([
-    ('VAST', "/n/vast-scratch/kempner_alvarez_lab/datasets"),
+    ('SCRATCH', "/n/netscratch/alvarez_lab/Lab/datasets/streaming"),
     ('TIER1', "/n/alvarez_lab_tier1/Lab/datasets"),
     ('DEVBOX', os.path.expanduser(path="~/work/DataLocal")),
 ])
@@ -57,7 +57,7 @@ def get_streaming_local_root_dir(data_dirs=_DEFAULT_DIRS):
         for name,path in data_dirs.items():
             if os.path.exists(path):
                 return path
-    msg = f"Cannot find any of these local_dirs {[STUDIO_CACHE]+list(data_dirs.values())}. You might be storing an extra copy of the dataset somehwere undesirable."
+    msg = f"Cannot find any of these local_dirs {list(data_dirs.values())}. You might be storing an extra copy of the dataset somewhere undesirable."
     warnings.warn(msg)
     
 def get_streaming_dirs(dataset):

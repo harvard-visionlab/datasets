@@ -12,8 +12,7 @@ from pdb import set_trace
 from .s3_auth import get_aws_credentials, is_object_public
 from .s3_downloads import download_s3_file
 
-def fetch(source, cache_dir=None, endpoint_url=None, region='us-east-1', dryrun=False, profile_name=None):
-    
+def fetch(source, cache_dir=None, endpoint_url=None, region='us-east-1', dryrun=False, profile_name=None):        
     parsed = urlparse(source)
     hasher = hashlib.sha256()
 

@@ -2,6 +2,8 @@ import os
 import zipfile
 import tarfile
 
+from pdb import set_trace
+
 def get_top_level_directory_fast(file_path):
     with tarfile.open(file_path, 'r:*') as tar:
         for member in tar:

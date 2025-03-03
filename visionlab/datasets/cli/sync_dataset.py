@@ -3,7 +3,9 @@ import signal
 import subprocess
 import fire
 
-from ..utils import get_aws_credentials
+from visionlab.datasets.utils import get_aws_credentials
+
+from pdb import set_trace
 
 def sync_dataset(local_directory, bucket_location, profile=None, size_only=True):
     """

@@ -94,6 +94,7 @@ def download_s3_file(s3_url, cache_dir=None, endpoint_url=None, region='us-east-
         endpoint_url = creds["endpoint_url"]
     if region is None:
         region = creds["region"]
+        
     is_public = is_object_public(s3_url, endpoint_url=endpoint_url, region=region)
     
     if not is_public:

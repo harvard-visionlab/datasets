@@ -1,12 +1,8 @@
-from .constants import *
 from .cog import *
-from .datasets import *
 from .ml_probe import *
 from .ml import *
 from .neuro import *
-from .utils import *
-from .version import *
-from .registry import dataset_registry
+from ..registry import dataset_registry
 
 from pdb import set_trace
 
@@ -30,5 +26,6 @@ def list_datasets(pattern="*"):
         print("No datasets found matching the specified pattern.")
     else:
         print("Available datasets:")
+        set_trace()
         for full_name, description in datasets:
             print(f"- {full_name}: {description}")

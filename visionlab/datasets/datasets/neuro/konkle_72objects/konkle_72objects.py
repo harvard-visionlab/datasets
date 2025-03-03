@@ -4,9 +4,9 @@ import scipy.io as sio
 from botocore import UNSIGNED
 from botocore.client import Config
 
-from ...utils import get_aws_credentials, fetch
-from ...datasets import StreamingDatasetVisionlab
-from ...registry import dataset_registry
+from ....utils import get_aws_credentials, fetch
+from ....core import StreamingDatasetVisionlab
+from ....registry import dataset_registry
 
 from pdb import set_trace
 
@@ -51,17 +51,17 @@ class NeuralDataset():
         
         return "\n".join(lines)
     
-@dataset_registry.register("neuro", "konkle_72_objects", split="SECTORS", metadata="72 Inanimate Objects fMRI Betas by SECTOR (Konkle, )")
+@dataset_registry.register("neuro", "konkle_72_objects", split="SECTORS", fmt='matfile', metadata="72 Inanimate Objects fMRI Betas by SECTOR (Konkle, )")
 class NeuralDatasetSectors(NeuralDataset):
     def __init__(self, profile_name=None):
         super().__init__(dataset="SECTORS", profile_name=profile_name)
 
-@dataset_registry.register("neuro", "konkle_72_objects", split="GRADIENT", metadata="72 Inanimate Objects fMRI Betas by GRADIENT ROI (Konkle, )")
+@dataset_registry.register("neuro", "konkle_72_objects", split="GRADIENT", fmt='matfile', metadata="72 Inanimate Objects fMRI Betas by GRADIENT ROI (Konkle, )")
 class NeuralDatasetGradient(NeuralDataset):
     def __init__(self, profile_name=None):
         super().__init__(dataset="GRADIENT", profile_name=profile_name)    
 
-@dataset_registry.register("neuro", "konkle_72_objects", split="stimuli", metadata="72 Inanimate Object Stimuli (PIL Images)")
+@dataset_registry.register("neuro", "konkle_72_objects", split="stimuli", fmt='images', metadata="72 Inanimate Object Stimuli (PIL Images)")
 class StimulusDataset(StreamingDatasetVisionlab):
     def __init__(self, profile_name=None, **kwargs):
         storage_options = get_aws_credentials(profile_name)

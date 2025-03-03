@@ -8,19 +8,23 @@ class DatasetRegistry:
         
     def register(self, category, name, split, fmt=None, metadata=""):
         """Register a dataset with a given name and category as a decorator or callable."""
+
         def decorator(cls):
             # Initialize nested dictionaries in both datasets and metadata
             if category not in self.datasets:
                 self.datasets[category] = {}
+            if category not in self.metadata:  
                 self.metadata[category] = {}
             if name not in self.datasets[category]:
                 self.datasets[category][name] = {}
             if name not in self.metadata[category]:
                 self.metadata[category][name] = {}
-            
-            # Store the class reference and description
-            self.datasets[category][name][split] = {}
-            self.metadata[category][name][split] = {}
+            if split not in self.datasets[category][name]:
+                self.datasets[category][name][split] = {}
+            if split not in self.metadata[category][name]:
+                self.metadata[category][name][split] = {}
+                
+            # Store the class reference and description / metadata
             self.datasets[category][name][split][fmt] = cls
             self.metadata[category][name][split][fmt] = metadata
                 
@@ -52,17 +56,20 @@ class DatasetRegistry:
             category_added = False
             for name, splits in datasets.items():
                 name_added = False
-                for split, description in splits.items():
-                    # Create the full name for pattern matching
-                    full_name = f"{category}/{name}/{split}"
-                    if fnmatch.fnmatch(full_name, pattern):
-                        if not category_added:
-                            lines.append(f"- {category}:")
-                            category_added = True
-                        if not name_added:
-                            lines.append(f"    - {name}:")
-                            name_added = True
-                        lines.append(f"        - {split}: {description}")
+                for split, formats in splits.items():                    
+                    avail_formats = list(formats.keys())                    
+                    for fmt in avail_formats:
+                        meta = self.metadata[category][name][split][fmt]
+                        # Create the full name for pattern matching
+                        full_name = f"{category}/{name}/{split}"
+                        if fnmatch.fnmatch(full_name, pattern):
+                            if not category_added:
+                                lines.append(f"- {category}:")
+                                category_added = True
+                            if not name_added:
+                                lines.append(f"    - {name}:")
+                                name_added = True
+                            lines.append(f"        - split='{split}', fmt='{fmt}': {meta}")
         
         if len(lines) == 1:
             lines.append(f"  No datasets found matching the specified pattern {pattern}.")
