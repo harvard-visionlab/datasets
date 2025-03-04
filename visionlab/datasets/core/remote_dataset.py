@@ -21,10 +21,15 @@ dataset_classes = {
     }
 
 try:
+    import ffcv
+except:
+    warnings.warn("FFCV not installed, will be unable to use ffcv datasets. Ignore this warning if you are not using ffcv.")
+
+try:
     from .ffcv_dataset import FFCVDataset
     dataset_classes[DatasetFormat.FFCV] = FFCVDataset
 except:
-    warnings.warn("FFCV not installed, will be unable to use ffcv datasets. Ignore this warning if you are not using ffcv.")
+    warnings.warn("Error importing FFCVDataset")
     
 class RemoteDataset:
     """Abstract base class for datasets loaded from remote sources.
@@ -58,6 +63,7 @@ class RemoteDataset:
         self.dataset_cls = dataset_cls
         self.profile_name = profile_name
         self.local_path = self._sync_dataset(source, cache_root, profile_name, region)
+        set_trace()
         self.dataset = self._initialize_dataset(self.local_path, **kwargs)
     
     def _sync_dataset(self, source, cache_root, profile_name, region):
@@ -74,7 +80,7 @@ class RemoteDataset:
         
         print(f"==> Detected dataset format: {type(source)}")
         dataset_cls = dataset_classes[type(source)] if self.dataset_cls is None else self.dataset_cls
-        
+                
         if has_keyword_arg(dataset_cls, 'cache_dir'):
             return dataset_cls(source, cache_dir=self.cache_dir, **kwargs)
         else:

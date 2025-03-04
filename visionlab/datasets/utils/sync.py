@@ -152,7 +152,7 @@ def sync_to_local_cache(source, cache_root=None, decompress=True, progress=True,
         return local_path
     
     else:
-        # `source` appears a single file:
+        # `source` appears a single remove file:
         metadata = get_file_metadata(source) 
         assert metadata is not None and metadata['size'] > 0, f"Could not access source data at {source}"
 
@@ -164,7 +164,7 @@ def sync_to_local_cache(source, cache_root=None, decompress=True, progress=True,
         # cache miss, sync the data:
         if not os.path.exists(local_path):   
             # sync the data
-            if metadata['scheme'] == 's3':
+            if metadata['scheme'].startswith('s3'):
                 download_s3_file(source, local_path, profile_name=profile_name, region=region)
             elif metadata['scheme'] in ['http','https']:
                 download_file(source, local_path)

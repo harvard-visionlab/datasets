@@ -9,7 +9,8 @@ from botocore import UNSIGNED
 from botocore.client import Config
 from pdb import set_trace
 
-from .s3_auth import get_aws_credentials, is_object_public
+from .s3_auth import get_aws_credentials
+from .s3_info import is_object_public, parse_extended_s3_path
 from .s3_downloads import download_s3_file
 
 def fetch(source, cache_dir=None, endpoint_url=None, region='us-east-1', dryrun=False, profile_name=None):        
@@ -63,25 +64,25 @@ def get_file_metadata(source, read_limit=8192, hash_length=32, profile_name=None
     
     Returns:
     dict: A dictionary containing 'size' (in bytes) and 'hash' (SHA-256 hash of content sample).
-    """
+    """    
     parsed = urlparse(source)
     hasher = hashlib.sha256()
     size = None
 
-    if parsed.scheme == "s3":
-        # For S3 URIs
-        bucket_name = parsed.netloc
-        key = parsed.path.lstrip('/')
+    if parsed.scheme.startswith("s3"):
+        # 
+        s3_uri, provider, endpoint_url, bucket_name, key = parse_extended_s3_path(source)
 
         # Check if the S3 object is public
-        creds = get_aws_credentials(profile_name)
-        if endpoint_url is None:
-            endpoint_url = creds["endpoint_url"]
-        if region is None:
-            region = creds["region"]
         is_public = is_object_public(source, endpoint_url=endpoint_url, region=region)
 
         if not is_public:
+            creds = get_aws_credentials(profile_name)
+            if endpoint_url is None:
+                endpoint_url = creds["endpoint_url"]
+            if region is None:
+                region = creds["region"]
+            print(endpoint_url, region, bucket_name, key)
             # Initialize the S3 client with credentials for private access
             s3 = boto3.client(
                 's3',

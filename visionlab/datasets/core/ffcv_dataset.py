@@ -1,10 +1,15 @@
 from PIL import Image
+from ffcv.reader import Reader
 from ffcv.loader import Loader, OrderOption
-from ffcv.fields.decoders import CenterCropRGBImageDecoder, SimpleRGBImageDecoder, IntDecoder
+from ffcv.fields.decoders import CenterCropRGBImageDecoder, SimpleRGBImageDecoder, IntDecoder, BytesDecoder
 # from ffcv.transforms import ToTensor, Normalize
 from ffcv.pipeline.operation import Operation
 import numpy as np
 from ffcv.fields import IntField, RGBImageField
+from ffcv.utils import decode_null_terminated_string
+from ffcv.types import (ALLOC_TABLE_TYPE, HeaderType, CURRENT_VERSION,
+                    FieldDescType, get_handlers, get_metadata_type)
+from pdb import set_trace
 
 from .custom_decoders import SimpleSampleReader, get_max_sample_size
 
@@ -18,7 +23,7 @@ default_custom_fields = {
 }
 
 class FFCVDataset:
-    def __init__(self, beton_file, pipelines=None, custom_fields=default_custom_fields, 
+    def __init__(self, beton_file, pipelines={}, custom_fields=None, 
                  image_field='image', label_field='label'):
         """
         Initialize a pseudo-dataset from a .beton file for random access to individual samples.
@@ -34,15 +39,29 @@ class FFCVDataset:
             label_pipeline (list): List of transformations for labels.
         """
         self.beton_file = beton_file
+        self.metadata = self.get_ffcv_metadata(beton_file)
         self.image_field = image_field
-        self.label_field = image_field
-        max_size = get_max_sample_size(beton_file, custom_fields=custom_fields)
-        self.pipelines = pipelines if pipelines is not None else {
-            image_field: [SimpleSampleReader(max_size)],
-            # image_field: [CenterCropRGBImageDecoder((224,224), DEFAULT_CROP_RATIO)],
-            label_field: [IntDecoder()],
-        }
-        self.custom_fields = custom_fields
+        self.label_field = label_field
+        if custom_fields is None:
+            self.custom_fields = {name: RGBImageField for name in self.metadata['field_names'] if image_field in name}
+        else:
+            self.custom_fields = custom_fields
+        
+        max_size = get_max_sample_size(beton_file, custom_fields=self.custom_fields)
+        
+        for field_name in self.metadata['field_names']:
+            if field_name in pipelines: 
+                continue
+            if image_field in field_name:
+                pipelines[field_name] = [SimpleSampleReader(max_size)]
+            elif field_name in ['label', 'index']:
+                pipelines[field_name] = [IntDecoder()]
+            else:
+                pipelines[field_name] = [BytesDecoder()]
+
+        self.pipelines = pipelines
+        print("wtf", self.pipelines)
+        print(custom_fields)
         
         self.loader = Loader(
             path=self.beton_file,
@@ -52,6 +71,36 @@ class FFCVDataset:
             pipelines=self.pipelines,
             custom_fields=self.custom_fields,
         )
+    
+    def get_ffcv_metadata(self, _path):
+    
+        # get header info
+        header = np.fromfile(_path, dtype=HeaderType, count=1)[0]
+        header.setflags(write=False)
+        version = header["version"]
+
+        if version != CURRENT_VERSION:
+            msg = f"file format mismatch: code={CURRENT_VERSION},file={version}"
+            raise AssertionError(msg)
+
+        num_samples = header["num_samples"]
+        page_size = header["page_size"]
+        num_fields = header["num_fields"]
+
+        # get field names
+        offset = HeaderType.itemsize
+        field_descriptors = np.fromfile(
+            _path, dtype=FieldDescType, count=num_fields, offset=offset
+        )
+        field_descriptors.setflags(write=False)
+        handlers = get_handlers(field_descriptors)
+
+        field_descriptors = field_descriptors
+        field_names = list(
+            map(decode_null_terminated_string, field_descriptors["name"])
+        )
+
+        return dict(num_samples=num_samples, field_names=field_names)
     
     def set_index(self, index):
         """Set the loader to access a specific single index."""

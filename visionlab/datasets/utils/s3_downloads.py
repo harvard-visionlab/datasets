@@ -7,7 +7,8 @@ from botocore.client import Config
 from pathlib import Path
 from tqdm.notebook import tqdm
 from .cache_dir import get_cache_dir
-from .s3_auth import get_aws_credentials, is_object_public
+from .s3_auth import get_aws_credentials
+from .s3_info import is_object_public, parse_extended_s3_path
 
 from pdb import set_trace
 
@@ -74,34 +75,28 @@ def sync_bucket_to_local(bucket_url, cache_dir=None, profile_name=None, dryrun=F
     # Perform the folder download
     download_folder(folder_key, cache_dir, bucket_name, dryrun=dryrun)      
     
-def download_s3_file(s3_url, cache_dir=None, endpoint_url=None, region='us-east-1', dryrun=False, profile_name=None):
+def download_s3_file(s3_url, cache_dir=None, endpoint_url=None, region=None, dryrun=False, profile_name=None):
     # Parse the bucket name and file key from the S3 URL
-    bucket_name, _, file_key = s3_url.strip("s3://").partition('/')
-
+    # bucket_name, _, file_key = s3_url.strip("s3://").partition('/')
+    s3_url, provider, endpoint_url, bucket_name, object_key = parse_extended_s3_path(s3_url)
+    
     # Set cache directory if not provided and construct target path
     if cache_dir is None:
         cache_dir = get_cache_dir()
     
-    if cache_dir.endswith(Path(file_key).name):
+    set_trace()
+    if cache_dir.endswith(Path(object_key).name):
         # looks like user provided full target_path
         target_path = cache_dir
     else:
-        target_path = os.path.join(cache_dir, bucket_name, file_key)
+        target_path = os.path.join(cache_dir, bucket_name, object_key)
 
     # First, check if the object is public
-    creds = get_aws_credentials(profile_name)
-    if endpoint_url is None:
-        endpoint_url = creds["endpoint_url"]
-    if region is None:
-        region = creds["region"]
-        
     is_public = is_object_public(s3_url, endpoint_url=endpoint_url, region=region)
     
     if not is_public:
-        #if not creds["aws_access_key_id"] or not creds["aws_secret_access_key"]:
-        #    raise ValueError("AWS credentials are missing or incomplete.")
-
         # Initialize the S3 resource with credentials for private access
+        creds = get_aws_credentials(profile_name)
         s3 = boto3.resource(
             's3',
             region_name=region,
@@ -116,14 +111,14 @@ def download_s3_file(s3_url, cache_dir=None, endpoint_url=None, region='us-east-
                             region_name=region, 
                             endpoint_url=endpoint_url,
                             config=Config(signature_version=UNSIGNED))
-    
-    s3_object = s3.Object(bucket_name, file_key)
+        
+    s3_object = s3.Object(bucket_name, object_key)
 
     # Check if the file already exists locally and matches the size on S3
     try:
         content_length = s3_object.content_length  # Get the S3 object size
     except ClientError as e:
-        print(f"Could not access object {file_key} in bucket {bucket_name}: {e}")
+        print(f"Could not access object {object_key} in bucket {bucket_name}: {e}")
         return
 
     if os.path.exists(target_path) and os.path.getsize(target_path) == content_length:
@@ -142,7 +137,7 @@ def download_s3_file(s3_url, cache_dir=None, endpoint_url=None, region='us-east-
     temp_path = target_path + '.filepart'
 
     # Download with a progress bar
-    with tqdm(total=content_length, unit='B', unit_scale=True, desc=f"Downloading {file_key}", file=sys.stdout) as progress_bar:
+    with tqdm(total=content_length, unit='B', unit_scale=True, desc=f"Downloading {object_key}", file=sys.stdout) as progress_bar:
         def progress_hook(bytes_amount):
             progress_bar.update(bytes_amount)
 

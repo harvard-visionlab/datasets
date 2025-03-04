@@ -1,10 +1,12 @@
 import os
+import re
 import boto3
 import requests
 import warnings
 from botocore.exceptions import ProfileNotFound
 from botocore.configloader import load_config
 import requests
+from urllib.parse import urlparse
 
 from pdb import set_trace
 
@@ -51,31 +53,33 @@ def get_credentials_by_profile(profile_name):
         print(f"Profile '{profile_name}' not found.")
         return None
 
-def is_object_public(s3_path, endpoint_url="https://s3.amazonaws.com", region="us-east-1"):
-    """
-    Check if an S3 object is public and exists.
-    
-    Args:
-        s3_path (str): S3 URI (e.g., s3://bucket-name/object-key) or public S3 URL (e.g., https://bucket-name.s3.amazonaws.com/object-key).
-        
-    Returns:
-        bool: True if the object exists and is publicly accessible, False otherwise.
-    """
-    # Convert S3 URI to public S3 URL
-    if s3_path.startswith("s3://"):
-        bucket_name, _, object_key = s3_path.replace("s3://", "").partition('/')
-        domain = endpoint_url.replace("s3.", f"s3.{region}.")
-        s3_url = f"{domain}/{bucket_name}/{object_key}"
-    else:
-        s3_url = s3_path  # Assume it's already a public URL
 
-    try:
-        # Perform a HEAD request to check if the object is public
-        response = requests.head(s3_url)
-        return response.status_code == 200
-    except requests.RequestException as e:        
-        print(f"Error checking object at url {s3_url}: {e}")
-        return False
+
+# def is_object_public(s3_path, endpoint_url="https://s3.amazonaws.com", region="us-east-1"):
+#     """
+#     Check if an S3 object is public and exists.
+    
+#     Args:
+#         s3_path (str): S3 URI (e.g., s3://bucket-name/object-key) or public S3 URL (e.g., https://s3.amazonaws.com/bucket-name/object-key).
+        
+#     Returns:
+#         bool: True if the object exists and is publicly accessible, False otherwise.
+#     """
+#     # Convert S3 URI to public S3 URL
+#     if s3_path.startswith("s3://"):
+#         bucket_name, _, object_key = s3_path.replace("s3://", "").partition('/')
+#         domain = endpoint_url.replace("s3.", f"s3.{region}.")
+#         s3_url = f"{domain}/{bucket_name}/{object_key}"
+#     else:
+#         s3_url = s3_path  # Assume it's already a public URL
+
+#     try:
+#         # Perform a HEAD request to check if the object is public
+#         response = requests.head(s3_url)
+#         return response.status_code == 200
+#     except requests.RequestException as e:        
+#         print(f"Error checking object at url {s3_url}: {e}")
+#         return False
         
 # def is_object_public(s3_url, region='us-east-1'):
 #     bucket_name, _, object_key = s3_url.strip("s3://").partition('/')
@@ -104,5 +108,4 @@ def is_object_public(s3_path, endpoint_url="https://s3.amazonaws.com", region="u
 #             warnings.warn(f"Error getting ACL for {object_key} in {bucket_name}: {e}")
 #             return False
 
-def is_object_private(s3_url, region='us-east-1'):
-    return not is_object_public(s3_url, region)    
+   
