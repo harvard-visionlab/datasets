@@ -2,7 +2,11 @@ import os
 from tqdm import tqdm
 from litdata import StreamingDataset
 from litdata.utilities.dataset_utilities import _read_updated_at
-from litdata.streaming.downloader import get_downloader_cls
+
+try:
+    from litdata.streaming.downloader import get_downloader_cls
+except:
+    from litdata.streaming.downloader import get_downloader as get_downloader_cls
 from visionlab.datasets.utils.s3_sync import s3_sync_data
 
 from pdb import set_trace
