@@ -10,6 +10,14 @@ from urllib.parse import urlparse
 
 from pdb import set_trace
 
+def get_storage_options(profile=None):
+    creds = get_aws_credentials(profile_name=profile)
+    return return {
+        "aws_access_key_id": creds['aws_access_key_id'],
+        "aws_secret_access_key": creds['aws_secret_access_key'],
+        "endpoint_url": creds['endpoint_url'],
+    }
+    
 def get_aws_credentials(profile_name=None):
     if profile_name is not None:
         creds = get_credentials_by_profile(profile_name)
@@ -20,7 +28,7 @@ def get_aws_credentials(profile_name=None):
         "aws_access_key_id": os.getenv('AWS_ACCESS_KEY_ID'),
         "aws_secret_access_key": os.getenv('AWS_SECRET_ACCESS_KEY'),
         "endpoint_url": os.getenv('AWS_ENDPOINT_URL', 'https://s3.amazonaws.com'),
-        # "region": os.getenv('AWS_DEFAULT_REGION', 'us-east-1'),
+        "region": os.getenv('AWS_DEFAULT_REGION', 'us-east-1'),
     }
 
 def get_credentials_by_profile(profile_name):
