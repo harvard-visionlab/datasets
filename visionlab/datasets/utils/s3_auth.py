@@ -12,7 +12,7 @@ from pdb import set_trace
 
 def get_storage_options(profile=None):
     creds = get_aws_credentials(profile_name=profile)
-    return return {
+    return {
         "aws_access_key_id": creds['aws_access_key_id'],
         "aws_secret_access_key": creds['aws_secret_access_key'],
         "endpoint_url": creds['endpoint_url'],
