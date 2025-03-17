@@ -246,3 +246,25 @@ def is_image_bytes(data_bytes: bytes):
         return True
     except Exception:
         return False
+
+def is_jpeg_bytes(image_bytes):
+    """
+    Check if the given bytes represent a JPEG image by examining the magic bytes.
+    
+    JPEG files typically start with one of these signatures:
+    - JFIF: bytes [0xFF, 0xD8, 0xFF, 0xE0] + "JFIF"
+    - Exif: bytes [0xFF, 0xD8, 0xFF, 0xE1] + "Exif"
+    - Other JPEG: bytes [0xFF, 0xD8, 0xFF] (general marker)
+    
+    Args:
+        image_bytes (bytes): The image data to check
+        
+    Returns:
+        bool: True if the image is a JPEG, False otherwise
+    """
+    # Check if we have enough bytes to determine the format
+    if len(image_bytes) < 3:
+        return False
+        
+    # All JPEG files start with FF D8 FF
+    return image_bytes[0:3] == b'\xFF\xD8\xFF'
