@@ -183,7 +183,7 @@ class StreamingDatasetVisionlab(StreamingDataset):
     
         body.append(f"\nImage transforms:")
         if self.transform is not None:
-            txt = repr(transform).replace("\n", f"\n{tab}")
+            txt = repr(self.transform).replace("\n", f"\n{tab}")
             body.append(f"{txt}")
         else:
             body.append(f"None")
