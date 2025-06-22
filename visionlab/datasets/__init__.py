@@ -1,3 +1,4 @@
+import cv2
 from .constants import *
 from .core import *
 from .datasets import *
