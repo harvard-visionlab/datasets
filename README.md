@@ -20,6 +20,15 @@ mamba install ipykernel -y
 python -m ipykernel install --user --name=dataprep
 ```
 
+Installation/setup for modal.com
+```
+apt-get update -y && apt-get install -y libturbojpeg0
+uv pip install git+https://github.com/rwightman/pytorch-image-models.git --system
+uv pip install git+https://github.com/Lightning-AI/litdata.git@main  --system
+uv pip install --upgrade git+https://github.com/lilohuang/PyTurboJPEG.git --system
+uv pip install opencv-python --system
+```
+
 ### installation
 
 Requirements/dependencies are not automatically installed, so you can install visionlab.datasets without fear of blasting / destroying your current python environment. See previous section for the minimal environment needed to use visionlab.datasets
