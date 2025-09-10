@@ -22,61 +22,15 @@ python -m ipykernel install --user --name=dataprep
 
 ### installation
 
-Requirements/dependencies are not automatically installed (e.g., torch, torchvision, numpy, pandas) so you can install the visionlab_datasets package without fear of mucking up your environment. Activate an environment with the following dependencies installed: ..., then install the visionlab_datasets package:
+Requirements/dependencies are not automatically installed, so you can install visionlab.datasets without fear of blasting / destroying your current python environment. See previous section for the minimal environment needed to use visionlab.datasets
 ```
-pip install git+https://github.com/harvard-visionlab/datasets.git
+python -m uv pip install git+https://github.com/harvard-visionlab/datasets.git
 ```
 
 # Usage Examples
 
 ```
-from visionlab.datasets import load_dataset, list_datasets
+from visionlab.datasets import StreamingDataset, load_dataset, list_streaming_datasets
 ```
 
-## list datasets
-You can look here for ml datasets, or here for neuroai datasets, or list them with list_datasets
-
-**list all datasets**:
-```
-list_datasets()
-```
-
-**list all ml datasets**:
-```
-list_datasets('ml/*')
-```
-
-**list all neuro datasets**:
-```
-list_datasets('neuro/*')
-```
-
-**list all cognitive (behavioral) datasets**:
-```
-list_datasets('cog/*')
-```
-
-**list all imagenet datasets**:
-```
-list_datasets('*imagenet*')
-```
-
-## load imagenet
-```
-# ml datasets come in multiple formats; for training "ffcv" is recommended, 
-# for analysis streaming datasets are recommended
-dataset = load_dataset('ml/imagenet1k', "val", fmt='streaming', res=256) # short edge resized to 256
-```
-
-## load konkle72objects stimuli
-```
-dataset = load_dataset('neuroai/konkle72objects', "stimuli")
-```
-
-## load konkle72objects neural data
-```
-dataset = load_dataset('neuroai/konkle72objects', "sectors")
-```
-
-
-
+## list_streaming_datasets
