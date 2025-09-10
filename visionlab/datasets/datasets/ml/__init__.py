@@ -1,1 +1,0 @@
-from .imagenet1k import *

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visionlab-datasets"         # <-- avoid conflict with HF 'datasets'
+version = "0.2.0"
+description = "Visionlab dataset utilities"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+# We map the top-level import 'visionlab.datasets' to your folder 'datasets'
+package-dir = { "visionlab.datasets" = "datasets" }
+# Explicitly list packages so setuptools doesn’t miss them.
+# If you have subpackages under datasets/, keep adding lines.
+packages = [
+  "visionlab.datasets",
+]
+
+# If you have subpackages under datasets/, add them like:
+# "visionlab.datasets.imagenet",
+# "visionlab.datasets.places365",
+# etc.

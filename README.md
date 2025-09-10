@@ -1,11 +1,24 @@
 # datasets
-datasets for cog-neuro-ai research
-
-Includes interfaces to machine-learning "datasets" (stimuli like ImageNet, Ecoset, Places365, VGGFAce2, etc.), neural datasets (like Konkle72Objects, etc.), and behavioral datasets (like asdf...).
+visionlab datasets
 
 ### setup
 
-For visionlab users, make sure you have setup your "cluster/laptop/devbox/colab" environments with the necessary aws and notion tokens, and environment variables [see here]()
+Make sure you have your aws credentials setup
+
+### environment (example)
+```
+conda create -n dataprep python=3.12
+conda activate dataprep
+conda install -c conda-forge mamba
+python -m pip install uv
+python -m uv pip install git+https://github.com/rwightman/pytorch-image-models.git
+python -m uv pip install git+https://github.com/Lightning-AI/litdata.git@main
+python -m uv pip install --upgrade git+https://github.com/lilohuang/PyTurboJPEG.git
+mamba install s5cmd
+mamba install -c conda-forge opencv -y
+mamba install ipykernel -y
+python -m ipykernel install --user --name=dataprep
+```
 
 ### installation
 

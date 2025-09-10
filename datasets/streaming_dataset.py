@@ -1,7 +1,9 @@
 import io
 import os
+import sys
 import cv2
 import numpy as np
+import pathlib
 from PIL import Image
 from tqdm import tqdm
 from litdata import StreamingDataset
@@ -20,28 +22,26 @@ except:
     
 turbo = TurboJPEG()
 
-try:
-    from litdata.streaming.downloader import get_downloader_cls
-except:
-    from litdata.streaming.downloader import get_downloader as get_downloader_cls
-from visionlab.datasets.utils.s3_sync import s3_sync_data
-
 class StreamingDatasetVisionlab(StreamingDataset):
     '''
     Visionlab version of StreamingDataset with pipelines for field transforms,
     automatic image decoding if requested, and pre-determined field type info.
     '''
-    def __init__(self, *args, transform=None, pipelines=None, decode_images=False, expected_version=None, 
-                 profile=None, storage_options={}, max_cache_size='350GB', **kwargs):
+    def __init__(self, *args, transform=None, pipelines=None, decode_images=False, expected_version=None, profile=None, storage_options={}, max_cache_size='350GB', **kwargs):
         # pipelines: dict mapping field names to transform functions.
         # decode_images: if True, bytes that are valid image bytes are decoded automatically
+        ensure_lightning_symlink_on_cluster()
         self.pipelines = pipelines
-        self.transform = transform        
-        if self.pipelines is not None and self.transform is not None:
+        if self.pipelines is not None and transform is not None:
             raise ValueError('pipelines and transform cannot both be set. If you only need to transform images, you can use transform. To specify different transforms per field, use pipelines.')
         self.decode_images = decode_images
         storage_options = self.set_storage_options(storage_options, profile)
-        super().__init__(*args, storage_options=storage_options, max_cache_size=max_cache_size, **kwargs)
+        super().__init__(*args, 
+                         transform=transform,
+                         storage_options=storage_options, 
+                         max_cache_size=max_cache_size, 
+                         **kwargs)
+        self._transform = transform
         self.version = _read_updated_at(self.input_dir) if self.input_dir is not None else None
         if expected_version is not None:
             assert self.version == str(expected_version), (
@@ -63,6 +63,7 @@ class StreamingDatasetVisionlab(StreamingDataset):
         # Determine the type of each field using one raw sample.
         # We bypass any transforms/decoding by directly calling the parent's __getitem__.
         raw_sample = super().__getitem__(0)
+        
         self.image_fields = []
         self.field_types = {}
         if hasattr(raw_sample, 'items'):
@@ -86,41 +87,7 @@ class StreamingDatasetVisionlab(StreamingDataset):
                         self.field_types[idx] = bytes
                 else:
                     self.field_types[idx] = type(value)
-    
-    def download_all_chunks(self, force_sync=False):
-        # get local and remote directories
-        local_dir = self.input_dir.path
-        remote_dir = self.input_dir.url
         
-        # determine if files should be synced
-        filepaths = [os.path.join(local_dir, filename) for filename in self.subsampled_files]        
-        all_files_exist = all([os.path.isfile(path) for path in filepaths])
-        should_sync_files = force_sync or not all_files_exist
-        
-        if should_sync_files and isinstance(remote_dir, str) and remote_dir.startswith("s3://"):
-            s3_sync_data(
-                from_dir=remote_dir, 
-                to_dir=local_dir, 
-                size_only=True, 
-                include="*.bin", 
-                storage_options=self.cache._reader._storage_options
-            )
-        elif should_sync_files:
-            # all chunk indices
-            chunk_indexes = [ChunkedIndex(*self.cache._get_chunk_index_from_index(index)) for index in range(len(self))]
-            # index of first item in each chunk 
-            unique_chunk_indexes = {}
-            for chunk in chunk_indexes:
-                if chunk.chunk_index not in unique_chunk_indexes:
-                    unique_chunk_indexes[chunk.chunk_index] = chunk
-            # Get the filtered list of ChunkedIndex objects
-            filtered_chunk_indexes = list(unique_chunk_indexes.values())
-            # force download by loading first item in each chunk
-            for index in tqdm(filtered_chunk_indexes):
-                _ = self[index]
-        elif all_files_exist:
-            print(f"==> All files in local cache: {local_dir}, skipping sync")
-    
     def __getitem__(self, idx):
         sample = super().__getitem__(idx)
         
@@ -129,15 +96,15 @@ class StreamingDatasetVisionlab(StreamingDataset):
             sample = self._decode_images(sample)
 
         # Apply image transforms on image fields
-        if self.transform is not None:
+        if self._transform is not None:
             if hasattr(sample, 'items'):
                 for key, value in sample.items():
                     if key in self.field_types and self.field_types[key] == "ImageBytes":
-                        sample[key] = self.transform(value)
+                        sample[key] = self._transform(value)
             else:
                 for i, value in enumerate(sample):
                     if i in self.field_types and self.field_types[i] == "ImageBytes":
-                        sample[i] = self.transform(value)
+                        sample[i] = self._transform(value)
                     
         # Apply pipeline transforms on corresponding fields.
         if self.pipelines is not None:
@@ -182,8 +149,8 @@ class StreamingDatasetVisionlab(StreamingDataset):
             body.append(f"None")
     
         body.append(f"\nImage transforms:")
-        if self.transform is not None:
-            txt = repr(self.transform).replace("\n", f"\n{tab}")
+        if self._transform is not None:
+            txt = repr(self._transform).replace("\n", f"\n{tab}")
             body.append(f"{txt}")
         else:
             body.append(f"None")
@@ -268,3 +235,41 @@ def is_jpeg_bytes(image_bytes):
         
     # All JPEG files start with FF D8 FF
     return image_bytes[0:3] == b'\xFF\xD8\xFF'
+
+def is_slurm_available():
+    return any(var in os.environ for var in ["SLURM_JOB_ID", "SLURM_CLUSTER_NAME"])
+
+def ensure_lightning_symlink_on_cluster():
+    if not is_slurm_available():
+        return # not on cluster, ignore
+    
+    home = pathlib.Path.home()
+    symlink_path = home / ".lightning"
+    target_path = pathlib.Path("/n/netscratch/alvarez_lab/Lab/.lightning")
+
+    # Case 1: symlink already exists and points correctly
+    if symlink_path.is_symlink():
+        if symlink_path.resolve() == target_path:
+            return  # all good
+        else:
+            raise RuntimeError(
+                f"~/.lightning already exists but points to {symlink_path.resolve()}, "
+                f"expected {target_path}. Please fix manually."
+            )
+
+    # Case 2: ~/.lightning exists but is not a symlink
+    if symlink_path.exists():
+        raise RuntimeError(
+            f"~/.lightning exists but is not a symlink. "
+            f"Please remove it and create a symlink to {target_path}."
+        )
+
+    # Case 3: doesn’t exist at all → try to create it
+    try:
+        symlink_path.symlink_to(target_path)
+        print(f"Created symlink: {symlink_path} -> {target_path}")
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not create symlink {symlink_path} -> {target_path}. "
+            f"Please create it manually."
+        ) from e
