@@ -1,0 +1,36 @@
+{
+  "name": "visionlab-datasets",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": "uv lock --python 3.10.12 && uv sync --dev && git config filter.nbstripout.clean 'uv run nbstripout' && git config filter.nbstripout.smudge cat && git config filter.nbstripout.required true",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": ".venv/bin/python"
+      }
+    }
+  },
+  "remoteUser": "root",
+  // Run JupyterLab on container start
+  "postStartCommand": "jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''",
+  // Mount AWS credentials from host, and persist .venv across rebuilds
+  "mounts": [
+    "source=${localEnv:HOME}/.aws,target=/root/.aws,type=bind,consistency=cached",
+    "source=visionlab-datasets-venv,target=/workspace/.venv,type=volume"
+  ],
+  // Environment variables
+  "remoteEnv": {
+    "AWS_REGION": "us-east-1",
+    "AWS_PROFILE": "admin"
+  }
+}

@@ -1,7 +1,6 @@
 import io
 import os
 import sys
-import cv2
 import numpy as np
 import pathlib
 from PIL import Image
@@ -10,6 +9,12 @@ from litdata import StreamingDataset
 from litdata.utilities.dataset_utilities import _read_updated_at
 from copy import deepcopy
 from pdb import set_trace
+
+# TODO: Consider replacing cv2 with torchvision.io.decode_image for non-JPEG fallback.
+# Currently cv2 handles some ImageNet images that aren't proper JPEGs.
+# Need to verify torch.decode speed and compatibility before switching.
+# See: https://pytorch.org/vision/stable/io.html#torchvision.io.decode_image
+import cv2
 
 try:
     # https://github.com/lilohuang/PyTurboJPEG/blob/master/turbojpeg.py

@@ -4,14 +4,76 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visionlab-datasets"         # <-- avoid conflict with HF 'datasets'
-version = "0.2.0"
+version = "0.3.0"
 description = "Visionlab dataset utilities"
-requires-python = ">=3.10"
+readme = "README.md"
+authors = [
+    {name = "George Alvarez", email = "grez72@gmail.com"}
+]
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    # Torch stack
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+
+    # Lightning litdata for streaming datasets
+    "litdata@git+https://github.com/Lightning-AI/litdata.git@main",
+
+    # OpenCV (headless version for server environments)
+    # TODO: Consider replacing cv2 with torchvision.io.decode_image for non-JPEG fallback.
+    # Currently cv2 handles some ImageNet images that aren't proper JPEGs.
+    # Need to verify torch.decode speed and compatibility before switching.
+    "opencv-python-headless",
+
+    # PyTurboJPEG for fast JPEG decoding
+    "PyTurboJPEG@git+https://github.com/lilohuang/PyTurboJPEG.git",
+
+    # Image utilities
+    "pillow",
+    "numpy",
+    "tqdm",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-xdist",
+    "ruff",
+    "ipykernel",
+    "nbstripout",
+    "ipywidgets",
+    "pandas",
+    "seaborn",
+    "matplotlib",
+    "jupyterlab",
+]
+
+# Route ONLY the torch packages to CUDA (Linux) or CPU (others)
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu121", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cpu",   marker = "sys_platform != 'linux' or platform_machine != 'x86_64'" },
+]
+torchvision = [
+    { index = "pytorch-cu121", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cpu",   marker = "sys_platform != 'linux' or platform_machine != 'x86_64'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url  = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url  = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.setuptools]
 # We map the top-level import 'visionlab.datasets' to your folder 'datasets'
 package-dir = { "visionlab.datasets" = "datasets" }
-# Explicitly list packages so setuptools doesn’t miss them.
+# Explicitly list packages so setuptools doesn't miss them.
 # If you have subpackages under datasets/, keep adding lines.
 packages = [
   "visionlab.datasets",
