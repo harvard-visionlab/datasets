@@ -9,8 +9,7 @@ Decoders:
     - turbo: TurboJPEG (fastest CPU decoder)
     - pil: PIL/Pillow
     - cv2: OpenCV
-    - torchvision_cpu: torchvision.io.decode_image on CPU
-    - torchvision_cuda: torchvision.io.decode_jpeg on CUDA (requires GPU)
+    - torchvision: torchvision.io.decode_image (no extra dependencies)
     - all: Run all available decoders
 """
 import argparse
@@ -45,8 +44,8 @@ try:
 except ImportError:
     cv2 = None
 
-# torchvision decoders
-from torchvision.io import decode_image, decode_jpeg, ImageReadMode
+# torchvision decoder
+from torchvision.io import decode_image, ImageReadMode
 
 
 @dataclass
@@ -64,7 +63,6 @@ class BenchmarkResult:
     num_workers: int
     epoch_stats: list[EpochStats]
     avg_images_per_sec: float
-    device: str
 
 
 class DecoderTransform:
@@ -132,8 +130,8 @@ class CV2Decoder(DecoderTransform):
         return self.to_dtype(tensor)
 
 
-class TorchvisionCPUDecoder(DecoderTransform):
-    """torchvision.io.decode_image on CPU."""
+class TorchvisionDecoder(DecoderTransform):
+    """torchvision.io.decode_image - no extra dependencies needed."""
 
     def __init__(self, crop_size: int = 224):
         super().__init__(crop_size)
@@ -148,30 +146,11 @@ class TorchvisionCPUDecoder(DecoderTransform):
         return self.to_dtype(tensor)
 
 
-class TorchvisionCUDADecoder(DecoderTransform):
-    """torchvision.io.decode_jpeg on CUDA - requires GPU."""
-
-    def __init__(self, crop_size: int = 224):
-        super().__init__(crop_size)
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA not available for torchvision_cuda decoder")
-
-    def __call__(self, image_bytes: bytes) -> torch.Tensor:
-        if isinstance(image_bytes, np.ndarray):
-            image_bytes = image_bytes.tobytes()
-        img_buffer = torch.frombuffer(image_bytes, dtype=torch.uint8)
-        # decode_jpeg with device='cuda' returns tensor on GPU
-        tensor = decode_jpeg(img_buffer, device='cuda')
-        tensor = self.crop(tensor)
-        return self.to_dtype(tensor)
-
-
 DECODERS = {
     'turbo': TurboDecoder,
     'pil': PILDecoder,
     'cv2': CV2Decoder,
-    'torchvision_cpu': TorchvisionCPUDecoder,
-    'torchvision_cuda': TorchvisionCUDADecoder,
+    'torchvision': TorchvisionDecoder,
 }
 
 
@@ -211,7 +190,6 @@ def run_benchmark(
     print(f"{'='*60}")
 
     decoder = create_decoder(decoder_name)
-    device = 'cuda' if decoder_name == 'torchvision_cuda' else 'cpu'
 
     # Setup dataset with decoder transform
     if cache_dir:
@@ -233,7 +211,7 @@ def run_benchmark(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=(device == 'cuda'),
+        pin_memory=True,
     )
 
     epoch_stats = []
@@ -247,10 +225,6 @@ def run_benchmark(
                 images = batch['image']
             else:
                 images = batch[0]
-
-            # Move to device if using CUDA decoder (images already on GPU)
-            if device == 'cuda' and images.device.type != 'cuda':
-                images = images.to('cuda', non_blocking=True)
 
             image_count += images.shape[0]
 
@@ -275,25 +249,24 @@ def run_benchmark(
         num_workers=num_workers,
         epoch_stats=epoch_stats,
         avg_images_per_sec=round(avg_images_per_sec, 1),
-        device=device,
     )
 
 
 def print_summary(results: list[BenchmarkResult]):
     """Print summary table of all benchmark results."""
-    print("\n" + "="*70)
+    print("\n" + "="*60)
     print("BENCHMARK SUMMARY")
-    print("="*70)
-    print(f"{'Decoder':<20} {'Device':<8} {'Avg img/s':>12} {'Epochs':>8}")
-    print("-"*70)
+    print("="*60)
+    print(f"{'Decoder':<20} {'Avg img/s':>12} {'Epochs':>8}")
+    print("-"*60)
 
     # Sort by average images per second (descending)
     sorted_results = sorted(results, key=lambda r: r.avg_images_per_sec, reverse=True)
 
     for r in sorted_results:
-        print(f"{r.decoder:<20} {r.device:<8} {r.avg_images_per_sec:>12.1f} {len(r.epoch_stats):>8}")
+        print(f"{r.decoder:<20} {r.avg_images_per_sec:>12.1f} {len(r.epoch_stats):>8}")
 
-    print("-"*70)
+    print("-"*60)
 
     if len(sorted_results) > 1:
         fastest = sorted_results[0]

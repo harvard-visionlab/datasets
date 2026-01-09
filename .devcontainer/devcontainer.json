@@ -4,6 +4,8 @@
     "dockerfile": "Dockerfile",
     "context": ".."
   },
+  // Increase shared memory for PyTorch DataLoader with multiple workers
+  "runArgs": ["--shm-size=2g"],
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "workspaceFolder": "/workspace",
   "postCreateCommand": "uv lock --python 3.10.12 && uv sync --dev && git config filter.nbstripout.clean 'uv run nbstripout' && git config filter.nbstripout.smudge cat && git config filter.nbstripout.required true",
