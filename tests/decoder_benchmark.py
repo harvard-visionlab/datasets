@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torchvision import transforms
+from torchvision.transforms import v2 as transforms
 from PIL import Image
 
 from visionlab.datasets import StreamingDataset
@@ -70,8 +70,12 @@ class BenchmarkResult:
 class DecoderTransform:
     """Base class for decoder transforms that convert bytes to tensor."""
 
-    def __init__(self, to_tensor: transforms.ToTensor):
-        self.to_tensor = to_tensor
+    def __init__(self, crop_size: int = 224):
+        self.crop_size = crop_size
+        # transforms.v2 works on both PIL images and tensors
+        self.to_tensor = transforms.ToImage()
+        self.crop = transforms.CenterCrop(crop_size)
+        self.to_dtype = transforms.ToDtype(torch.float32, scale=True)
 
     def __call__(self, image_bytes: bytes) -> torch.Tensor:
         raise NotImplementedError
@@ -80,8 +84,8 @@ class DecoderTransform:
 class TurboDecoder(DecoderTransform):
     """TurboJPEG decoder - fastest CPU option."""
 
-    def __init__(self, to_tensor: transforms.ToTensor):
-        super().__init__(to_tensor)
+    def __init__(self, crop_size: int = 224):
+        super().__init__(crop_size)
         if TurboJPEG is None:
             raise ImportError("TurboJPEG not available")
         self.turbo = TurboJPEG()
@@ -90,24 +94,31 @@ class TurboDecoder(DecoderTransform):
         if isinstance(image_bytes, np.ndarray):
             image_bytes = image_bytes.tobytes()
         rgb_array = self.turbo.decode(image_bytes, pixel_format=TJPF_RGB)
-        return self.to_tensor(rgb_array)
+        tensor = self.to_tensor(rgb_array)
+        tensor = self.crop(tensor)
+        return self.to_dtype(tensor)
 
 
 class PILDecoder(DecoderTransform):
     """PIL/Pillow decoder."""
 
+    def __init__(self, crop_size: int = 224):
+        super().__init__(crop_size)
+
     def __call__(self, image_bytes: bytes) -> torch.Tensor:
         if isinstance(image_bytes, np.ndarray):
             image_bytes = image_bytes.tobytes()
         pil_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        return self.to_tensor(pil_image)
+        tensor = self.to_tensor(pil_image)
+        tensor = self.crop(tensor)
+        return self.to_dtype(tensor)
 
 
 class CV2Decoder(DecoderTransform):
     """OpenCV decoder."""
 
-    def __init__(self, to_tensor: transforms.ToTensor):
-        super().__init__(to_tensor)
+    def __init__(self, crop_size: int = 224):
+        super().__init__(crop_size)
         if cv2 is None:
             raise ImportError("OpenCV (cv2) not available")
 
@@ -116,26 +127,32 @@ class CV2Decoder(DecoderTransform):
             image_bytes = image_bytes.tobytes()
         bgr_image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
         rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-        return self.to_tensor(rgb_image)
+        tensor = self.to_tensor(rgb_image)
+        tensor = self.crop(tensor)
+        return self.to_dtype(tensor)
 
 
 class TorchvisionCPUDecoder(DecoderTransform):
     """torchvision.io.decode_image on CPU."""
 
+    def __init__(self, crop_size: int = 224):
+        super().__init__(crop_size)
+
     def __call__(self, image_bytes: bytes) -> torch.Tensor:
         if isinstance(image_bytes, np.ndarray):
             image_bytes = image_bytes.tobytes()
         img_buffer = torch.frombuffer(image_bytes, dtype=torch.uint8)
-        # decode_image returns CHW tensor with uint8, convert to float [0,1]
+        # decode_image returns CHW tensor with uint8
         tensor = decode_image(img_buffer, mode=ImageReadMode.RGB)
-        return tensor.float() / 255.0
+        tensor = self.crop(tensor)
+        return self.to_dtype(tensor)
 
 
 class TorchvisionCUDADecoder(DecoderTransform):
     """torchvision.io.decode_jpeg on CUDA - requires GPU."""
 
-    def __init__(self, to_tensor: transforms.ToTensor):
-        super().__init__(to_tensor)
+    def __init__(self, crop_size: int = 224):
+        super().__init__(crop_size)
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA not available for torchvision_cuda decoder")
 
@@ -145,7 +162,8 @@ class TorchvisionCUDADecoder(DecoderTransform):
         img_buffer = torch.frombuffer(image_bytes, dtype=torch.uint8)
         # decode_jpeg with device='cuda' returns tensor on GPU
         tensor = decode_jpeg(img_buffer, device='cuda')
-        return tensor.float() / 255.0
+        tensor = self.crop(tensor)
+        return self.to_dtype(tensor)
 
 
 DECODERS = {
@@ -160,11 +178,10 @@ DECODERS = {
 def get_available_decoders() -> list[str]:
     """Return list of decoders available on this system."""
     available = []
-    to_tensor = transforms.ToTensor()
 
     for name, decoder_cls in DECODERS.items():
         try:
-            decoder_cls(to_tensor)
+            decoder_cls()
             available.append(name)
         except (ImportError, RuntimeError) as e:
             print(f"  Decoder '{name}' not available: {e}")
@@ -172,12 +189,11 @@ def get_available_decoders() -> list[str]:
     return available
 
 
-def create_decoder(name: str) -> DecoderTransform:
+def create_decoder(name: str, crop_size: int = 224) -> DecoderTransform:
     """Create a decoder instance by name."""
-    to_tensor = transforms.ToTensor()
     if name not in DECODERS:
         raise ValueError(f"Unknown decoder: {name}. Available: {list(DECODERS.keys())}")
-    return DECODERS[name](to_tensor)
+    return DECODERS[name](crop_size=crop_size)
 
 
 def run_benchmark(
