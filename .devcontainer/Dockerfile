@@ -1,26 +1,20 @@
 FROM python:3.10-slim-bookworm
 
-# Install build dependencies (including wget for install_libjpegturbo.sh)
+# Install system dependencies
+# libjpeg-turbo8 is used automatically by PIL for faster JPEG decoding
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake pkg-config git curl wget unzip \
-    libjpeg-dev libpng-dev libtiff-dev \
+    build-essential git curl wget unzip \
+    libjpeg-turbo-progs libjpeg62-turbo-dev \
+    libpng-dev libtiff-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and run install scripts
-# (module load commands fail silently with || true)
-COPY install_libjpegturbo.sh install_opencv.sh install_aws_cli.sh /tmp/
-
-RUN chmod +x /tmp/install_*.sh && \
-    /tmp/install_libjpegturbo.sh && \
-    /tmp/install_opencv.sh && \
+# Install AWS CLI
+COPY install_aws_cli.sh /tmp/
+RUN chmod +x /tmp/install_aws_cli.sh && \
     /tmp/install_aws_cli.sh && \
-    rm /tmp/install_*.sh
+    rm /tmp/install_aws_cli.sh
 
-# Update library cache and set environment
-RUN ldconfig
 ENV PATH="/root/.local/bin:$PATH"
-ENV LD_LIBRARY_PATH="/root/.local/lib:$LD_LIBRARY_PATH"
-ENV PKG_CONFIG_PATH="/root/.local/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh

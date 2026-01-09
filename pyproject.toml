@@ -13,21 +13,12 @@ authors = [
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    # Torch stack
+    # Torch stack (includes image decoding via torchvision.io.decode_image)
     "torch>=2.1.0",
     "torchvision>=0.16.0",
 
     # Lightning litdata for streaming datasets
     "litdata@git+https://github.com/Lightning-AI/litdata.git@main",
-
-    # OpenCV (headless version for server environments)
-    # TODO: Consider replacing cv2 with torchvision.io.decode_image for non-JPEG fallback.
-    # Currently cv2 handles some ImageNet images that aren't proper JPEGs.
-    # Need to verify torch.decode speed and compatibility before switching.
-    "opencv-python-headless",
-
-    # PyTurboJPEG for fast JPEG decoding
-    "PyTurboJPEG@git+https://github.com/lilohuang/PyTurboJPEG.git",
 
     # Image utilities
     "pillow",

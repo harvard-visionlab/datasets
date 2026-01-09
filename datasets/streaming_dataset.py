@@ -10,22 +10,9 @@ from litdata.utilities.dataset_utilities import _read_updated_at
 from copy import deepcopy
 from pdb import set_trace
 
-# TODO: Consider replacing cv2 with torchvision.io.decode_image for non-JPEG fallback.
-# Currently cv2 handles some ImageNet images that aren't proper JPEGs.
-# Need to verify torch.decode speed and compatibility before switching.
-# See: https://pytorch.org/vision/stable/io.html#torchvision.io.decode_image
-import cv2
-
-try:
-    # https://github.com/lilohuang/PyTurboJPEG/blob/master/turbojpeg.py
-    from turbojpeg import TurboJPEG, TJPF_RGB, TJPF_BGR
-except:
-    # https://github.com/loopbio/PyTurboJPEG/tree/loopbio
-    from turbojpeg import TurboJPEG, TJPF
-    TJPF_RGB = TJPF.RGB
-    TJPF_BGR = TJPF.BGR
-    
-turbo = TurboJPEG()
+import torch
+from torchvision.io import decode_image as tv_decode_image, ImageReadMode
+from torchvision.transforms import functional as TF
 
 class StreamingDatasetVisionlab(StreamingDataset):
     '''
@@ -182,64 +169,46 @@ class StreamingDatasetVisionlab(StreamingDataset):
             
         return "\n".join(lines)
 
-def decode_image(image_bytes, to_pil=False, pixel_format=TJPF_RGB):   
-    if isinstance(image_bytes, Image.Image):
+def decode_image(image_bytes):
+    """Decode image bytes to tensor (CHW format).
+
+    Handles various input types gracefully:
+    - torch.Tensor: returned as-is
+    - PIL.Image: converted to tensor CHW
+    - np.ndarray (HWC): converted to tensor CHW
+    - bytes or np.ndarray (1D): decoded using torchvision
+
+    Returns:
+        torch.Tensor: RGB image tensor in CHW format, uint8 [0-255]
+    """
+    # Already a tensor - return as-is
+    if isinstance(image_bytes, torch.Tensor):
         return image_bytes
 
+    # Already a PIL Image - convert to tensor
+    if isinstance(image_bytes, Image.Image):
+        return TF.pil_to_tensor(image_bytes)
+
+    # Already a decoded numpy array (HWC) - convert to tensor (CHW)
     if isinstance(image_bytes, np.ndarray) and image_bytes.ndim > 1:
-        return Image.fromarray(image_bytes) if to_pil else image_bytes
-        
-    # convert numpy arrays to bytes
+        return torch.from_numpy(image_bytes).permute(2, 0, 1)
+
+    # Numpy array of bytes - convert to Python bytes
     if isinstance(image_bytes, np.ndarray):
         image_bytes = image_bytes.tobytes()
 
-    if is_jpeg_bytes(image_bytes):
-        rgb_image = turbo.decode(image_bytes, pixel_format=pixel_format)
-    else:
-        try:
-            rgb_image = Image.open(io.BytesIO(image_bytes))
-            rgb_image.verify()
-            rgb_image = rgb_image.convert('RGB')
-        except:
-            # Decode to BGR
-            bgr_image = cv2.imdecode(np.array(image_bytes), cv2.IMREAD_COLOR)
-            # Convert BGR to RGB
-            rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-
-    if to_pil and isinstance(rgb_image, np.ndarray):
-        rgb_image = Image.fromarray(rgb_image)
-
-    return rgb_image
+    # Decode bytes to tensor using torchvision
+    img_buffer = torch.frombuffer(image_bytes, dtype=torch.uint8)
+    return tv_decode_image(img_buffer, mode=ImageReadMode.RGB)
     
 def is_image_bytes(data_bytes: bytes):
+    """Check if bytes represent a valid image by attempting to open with PIL."""
     try:
         img = Image.open(io.BytesIO(data_bytes))
         img.verify()
         return True
     except Exception:
         return False
-
-def is_jpeg_bytes(image_bytes):
-    """
-    Check if the given bytes represent a JPEG image by examining the magic bytes.
-    
-    JPEG files typically start with one of these signatures:
-    - JFIF: bytes [0xFF, 0xD8, 0xFF, 0xE0] + "JFIF"
-    - Exif: bytes [0xFF, 0xD8, 0xFF, 0xE1] + "Exif"
-    - Other JPEG: bytes [0xFF, 0xD8, 0xFF] (general marker)
-    
-    Args:
-        image_bytes (bytes): The image data to check
-        
-    Returns:
-        bool: True if the image is a JPEG, False otherwise
-    """
-    # Check if we have enough bytes to determine the format
-    if len(image_bytes) < 3:
-        return False
-        
-    # All JPEG files start with FF D8 FF
-    return image_bytes[0:3] == b'\xFF\xD8\xFF'
 
 def is_slurm_available():
     return any(var in os.environ for var in ["SLURM_JOB_ID", "SLURM_CLUSTER_NAME"])

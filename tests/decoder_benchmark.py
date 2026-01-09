@@ -2,14 +2,12 @@
 Benchmark different image decoders with StreamingDataset.
 
 Usage:
-    uv run python tests/decoder_benchmark.py --decoder turbo --epochs 3
+    uv run python tests/decoder_benchmark.py --decoder torchvision --epochs 3
     uv run python tests/decoder_benchmark.py --decoder all --batch-size 128 --num-workers 4
 
 Decoders:
-    - turbo: TurboJPEG (fastest CPU decoder)
     - pil: PIL/Pillow
-    - cv2: OpenCV
-    - torchvision: torchvision.io.decode_image (no extra dependencies)
+    - torchvision: torchvision.io.decode_image (recommended, no extra dependencies)
     - all: Run all available decoders
 """
 import argparse
@@ -21,31 +19,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as transforms
+from torchvision.io import decode_image, ImageReadMode
 from PIL import Image
 
 from visionlab.datasets import StreamingDataset
 from litdata.streaming.cache import Dir
-
-
-# TurboJPEG setup
-try:
-    from turbojpeg import TurboJPEG, TJPF_RGB
-except ImportError:
-    try:
-        from turbojpeg import TurboJPEG, TJPF
-        TJPF_RGB = TJPF.RGB
-    except ImportError:
-        TurboJPEG = None
-        TJPF_RGB = None
-
-# OpenCV
-try:
-    import cv2
-except ImportError:
-    cv2 = None
-
-# torchvision decoder
-from torchvision.io import decode_image, ImageReadMode
 
 
 @dataclass
@@ -79,24 +57,6 @@ class DecoderTransform:
         raise NotImplementedError
 
 
-class TurboDecoder(DecoderTransform):
-    """TurboJPEG decoder - fastest CPU option."""
-
-    def __init__(self, crop_size: int = 224):
-        super().__init__(crop_size)
-        if TurboJPEG is None:
-            raise ImportError("TurboJPEG not available")
-        self.turbo = TurboJPEG()
-
-    def __call__(self, image_bytes: bytes) -> torch.Tensor:
-        if isinstance(image_bytes, np.ndarray):
-            image_bytes = image_bytes.tobytes()
-        rgb_array = self.turbo.decode(image_bytes, pixel_format=TJPF_RGB)
-        tensor = self.to_tensor(rgb_array)
-        tensor = self.crop(tensor)
-        return self.to_dtype(tensor)
-
-
 class PILDecoder(DecoderTransform):
     """PIL/Pillow decoder."""
 
@@ -112,26 +72,8 @@ class PILDecoder(DecoderTransform):
         return self.to_dtype(tensor)
 
 
-class CV2Decoder(DecoderTransform):
-    """OpenCV decoder."""
-
-    def __init__(self, crop_size: int = 224):
-        super().__init__(crop_size)
-        if cv2 is None:
-            raise ImportError("OpenCV (cv2) not available")
-
-    def __call__(self, image_bytes: bytes) -> torch.Tensor:
-        if isinstance(image_bytes, np.ndarray):
-            image_bytes = image_bytes.tobytes()
-        bgr_image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-        rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-        tensor = self.to_tensor(rgb_image)
-        tensor = self.crop(tensor)
-        return self.to_dtype(tensor)
-
-
 class TorchvisionDecoder(DecoderTransform):
-    """torchvision.io.decode_image - no extra dependencies needed."""
+    """torchvision.io.decode_image - recommended, no extra dependencies."""
 
     def __init__(self, crop_size: int = 224):
         super().__init__(crop_size)
@@ -147,9 +89,7 @@ class TorchvisionDecoder(DecoderTransform):
 
 
 DECODERS = {
-    'turbo': TurboDecoder,
     'pil': PILDecoder,
-    'cv2': CV2Decoder,
     'torchvision': TorchvisionDecoder,
 }
 
