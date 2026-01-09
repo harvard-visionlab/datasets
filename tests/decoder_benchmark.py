@@ -20,10 +20,21 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as transforms
 from torchvision.io import decode_image, ImageReadMode
-from PIL import Image
+from PIL import Image, features as pil_features
 
 from visionlab.datasets import StreamingDataset
 from litdata.streaming.cache import Dir
+
+
+def check_pil_turbo() -> bool:
+    """Check if PIL is using libjpeg-turbo."""
+    try:
+        return pil_features.check('libjpeg_turbo')
+    except Exception:
+        return False
+
+
+PIL_HAS_TURBO = check_pil_turbo()
 
 
 @dataclass
@@ -37,6 +48,7 @@ class EpochStats:
 @dataclass
 class BenchmarkResult:
     decoder: str
+    display_name: str
     batch_size: int
     num_workers: int
     epoch_stats: list[EpochStats]
@@ -86,6 +98,13 @@ class TorchvisionDecoder(DecoderTransform):
         tensor = decode_image(img_buffer, mode=ImageReadMode.RGB)
         tensor = self.crop(tensor)
         return self.to_dtype(tensor)
+
+
+def get_decoder_display_name(name: str) -> str:
+    """Get display name for decoder, including turbo status for PIL."""
+    if name == 'pil':
+        return f"pil(turbo={PIL_HAS_TURBO})"
+    return name
 
 
 DECODERS = {
@@ -185,6 +204,7 @@ def run_benchmark(
 
     return BenchmarkResult(
         decoder=decoder_name,
+        display_name=get_decoder_display_name(decoder_name),
         batch_size=batch_size,
         num_workers=num_workers,
         epoch_stats=epoch_stats,
@@ -194,23 +214,23 @@ def run_benchmark(
 
 def print_summary(results: list[BenchmarkResult]):
     """Print summary table of all benchmark results."""
-    print("\n" + "="*60)
+    print("\n" + "="*65)
     print("BENCHMARK SUMMARY")
-    print("="*60)
-    print(f"{'Decoder':<20} {'Avg img/s':>12} {'Epochs':>8}")
-    print("-"*60)
+    print("="*65)
+    print(f"{'Decoder':<25} {'Avg img/s':>12} {'Epochs':>8}")
+    print("-"*65)
 
     # Sort by average images per second (descending)
     sorted_results = sorted(results, key=lambda r: r.avg_images_per_sec, reverse=True)
 
     for r in sorted_results:
-        print(f"{r.decoder:<20} {r.avg_images_per_sec:>12.1f} {len(r.epoch_stats):>8}")
+        print(f"{r.display_name:<25} {r.avg_images_per_sec:>12.1f} {len(r.epoch_stats):>8}")
 
-    print("-"*60)
+    print("-"*65)
 
     if len(sorted_results) > 1:
         fastest = sorted_results[0]
-        print(f"\nFastest decoder: {fastest.decoder} ({fastest.avg_images_per_sec:.1f} img/s)")
+        print(f"\nFastest decoder: {fastest.display_name} ({fastest.avg_images_per_sec:.1f} img/s)")
 
 
 def main():
