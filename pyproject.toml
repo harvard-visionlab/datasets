@@ -40,27 +40,6 @@ dev = [
     "jupyterlab",
 ]
 
-# Route ONLY the torch packages to CUDA (Linux) or CPU (others)
-[tool.uv.sources]
-torch = [
-    { index = "pytorch-cu121", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-    { index = "pytorch-cpu",   marker = "sys_platform != 'linux' or platform_machine != 'x86_64'" },
-]
-torchvision = [
-    { index = "pytorch-cu121", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-    { index = "pytorch-cpu",   marker = "sys_platform != 'linux' or platform_machine != 'x86_64'" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cu121"
-url  = "https://download.pytorch.org/whl/cu121"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url  = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
 [tool.setuptools]
 # We map the top-level import 'visionlab.datasets' to your folder 'datasets'
 package-dir = { "visionlab.datasets" = "datasets" }
