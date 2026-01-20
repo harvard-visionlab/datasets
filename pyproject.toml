@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visionlab-datasets"         # <-- avoid conflict with HF 'datasets'
-version = "0.3.2"
+version = "0.3.3"
 description = "Visionlab dataset utilities"
 readme = "README.md"
 authors = [
@@ -22,6 +22,9 @@ dependencies = [
 
     # Remote data utilities
     "remote-data@git+https://github.com/harvard-visionlab/remote-data.git@main",
+
+    # Auth utilities
+    "visionlab-auth@git+https://github.com/harvard-visionlab/auth.git@main",
 
     # Image utilities
     "pillow",
