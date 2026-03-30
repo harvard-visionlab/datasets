@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visionlab-datasets"         # <-- avoid conflict with HF 'datasets'
-version = "0.3.3"
-description = "Visionlab dataset utilities"
+version = "0.4.0"
+description = "Visionlab dataset registry and preparation utilities for slipstream"
 readme = "README.md"
 authors = [
     {name = "George Alvarez", email = "grez72@gmail.com"}
@@ -13,22 +13,24 @@ authors = [
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    # Torch stack (includes image decoding via torchvision.io.decode_image)
+    # Slipstream data loader
+    "visionlab-slipstream@git+https://github.com/harvard-visionlab/slipstream.git@main",
+
+    # Torch stack (for preprocessing transforms)
     "torch>=2.1.0",
     "torchvision>=0.16.0",
-
-    # Lightning litdata for streaming datasets
-    "litdata@git+https://github.com/Lightning-AI/litdata.git@main",
-
-    # Remote data utilities
-    "remote-data@git+https://github.com/harvard-visionlab/remote-data.git@main",
-
-    # Auth utilities
-    "visionlab-auth@git+https://github.com/harvard-visionlab/auth.git@main",
 
     # Image utilities
     "pillow",
     "numpy",
+]
+
+[project.optional-dependencies]
+# Legacy: for projects still using StreamingDatasetVisionlab
+legacy = [
+    "litdata@git+https://github.com/Lightning-AI/litdata.git@main",
+    "remote-data@git+https://github.com/harvard-visionlab/remote-data.git@main",
+    "visionlab-auth@git+https://github.com/harvard-visionlab/auth.git@main",
     "tqdm",
 ]
 
@@ -49,13 +51,8 @@ dev = [
 [tool.setuptools]
 # We map the top-level import 'visionlab.datasets' to your folder 'datasets'
 package-dir = { "visionlab.datasets" = "datasets" }
-# Explicitly list packages so setuptools doesn't miss them.
-# If you have subpackages under datasets/, keep adding lines.
 packages = [
   "visionlab.datasets",
+  "visionlab.datasets._configs",
+  "visionlab.datasets.prep",
 ]
-
-# If you have subpackages under datasets/, add them like:
-# "visionlab.datasets.imagenet",
-# "visionlab.datasets.places365",
-# etc.

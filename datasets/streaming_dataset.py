@@ -1,6 +1,19 @@
+"""Legacy streaming dataset wrapper.
+
+.. deprecated::
+    ``StreamingDatasetVisionlab`` is deprecated. Use ``slipstream.SlipstreamDataset``
+    instead, which supports LitData streaming, ImageFolder, and FFCV sources with
+    higher performance. Install via ``pip install visionlab-slipstream``.
+
+    To load lab datasets with automatic platform detection::
+
+        from visionlab.datasets import load
+        dataset = load("imagenet1k", split="val")
+"""
 import io
 import os
 import sys
+import warnings
 import numpy as np
 import pathlib
 from PIL import Image
@@ -8,11 +21,18 @@ from tqdm import tqdm
 from litdata import StreamingDataset
 from litdata.utilities.dataset_utilities import _read_updated_at
 from copy import deepcopy
-from pdb import set_trace
 
 import torch
 from torchvision.io import decode_image as tv_decode_image, ImageReadMode
 from torchvision.transforms import functional as TF
+
+warnings.warn(
+    "StreamingDatasetVisionlab is deprecated. "
+    "Use slipstream.SlipstreamDataset instead (pip install visionlab-slipstream). "
+    "See: from visionlab.datasets import load",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class StreamingDatasetVisionlab(StreamingDataset):
