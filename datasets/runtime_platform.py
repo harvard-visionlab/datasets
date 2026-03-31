@@ -25,7 +25,7 @@ class Platform(Enum):
 # Platform-specific slipstream cache directories.
 # Override with SLIPSTREAM_CACHE_DIR env var.
 PLATFORM_CACHE_DIRS = {
-    Platform.FAS_CLUSTER: "/n/netscratch/alvarez_lab/Lab/.cache/slipstream",
+    Platform.FAS_CLUSTER: "/n/alvarez_lab_tier1/Lab/datasets/slipstream",
     Platform.LIGHTNING_STUDIO: "/tmp/slipstream_cache",
     Platform.DEVCONTAINER: str(Path.home() / ".slipstream"),
     Platform.GPU_DEVBOX: str(Path.home() / ".slipstream"),
@@ -43,8 +43,19 @@ def is_lightning_studio():
 
 
 def is_slurm_available():
-    """Check if SLURM scheduler is available (running inside a SLURM job)."""
-    return any(var in os.environ for var in ["SLURM_JOB_ID", "SLURM_CLUSTER_NAME"])
+    """Check if running on a SLURM-managed cluster.
+
+    Checks (in order): SLURM env vars, SLURM commands in PATH, FAS hostname.
+    Note: SLURM env vars are not always propagated (e.g., Jupyter kernels),
+    so we also check for SLURM commands and hostname patterns.
+    """
+    # Fast path: env vars (set inside SLURM jobs)
+    if any(var in os.environ for var in ["SLURM_JOB_ID", "SLURM_CLUSTER_NAME"]):
+        return True
+    # SLURM commands available on the node
+    if shutil.which("sbatch") is not None and shutil.which("squeue") is not None:
+        return True
+    return False
 
 
 def has_slurm_scheduler():
