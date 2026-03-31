@@ -1,16 +1,15 @@
 """Dataset registry and load() function.
 
-Provides a declarative registry of lab datasets with their S3 paths,
-metadata, and configuration. The ``load()`` function resolves a dataset
-name + split to a ``SlipstreamDataset`` with the correct source URL and
-platform-appropriate cache directory.
+Provides a declarative registry of lab datasets with their S3 remote cache
+paths and metadata. The ``load()`` function resolves a dataset name + split
++ format to a ``SlipstreamDataset`` backed by a pre-built remote cache.
 
 Usage::
 
     from visionlab.datasets import load
 
     dataset = load("imagenet1k", split="val")
-    dataset = load("imagenette", split="train")
+    dataset = load("imagenet1k", split="val", fmt="yuv420")
 """
 from __future__ import annotations
 
@@ -28,23 +27,12 @@ class DatasetConfig:
     Args:
         name: Short identifier (e.g., "imagenet1k", "imagenette").
         num_classes: Number of classes.
-        splits: Mapping of split name to source URL or local path.
-        field_types: Mapping of field name to type string (for documentation).
-        remote_cache: S3 path for shared slipstream caches (optional).
-        source_type: One of "imagefolder", "streaming", "ffcv", "custom".
+        remote_cache: Mapping of (split, fmt) → S3 remote cache path.
         metadata: Arbitrary extra metadata (label maps, class lists, etc.).
     """
     name: str
     num_classes: int
-    splits: dict[str, str]
-    field_types: dict[str, str] = field(default_factory=lambda: {
-        "image": "ImageBytes",
-        "label": "int",
-        "index": "int",
-        "path": "str",
-    })
-    remote_cache: str | None = None
-    source_type: str = "streaming"
+    remote_cache: dict[tuple[str, str], str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -73,34 +61,57 @@ def get_config(name: str) -> DatasetConfig:
     return REGISTRY[name]
 
 
-def load(name: str, split: str = "val", **kwargs):
+def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
     """Load a registered dataset as a SlipstreamDataset.
 
+    Downloads the pre-built cache from S3 if not already present locally.
     Automatically configures the slipstream cache directory based on the
-    detected platform before creating the dataset.
+    detected platform.
 
     Args:
-        name: Registered dataset name (e.g., "imagenet1k", "imagenette").
+        name: Registered dataset name (e.g., "imagenet1k").
         split: Dataset split (e.g., "train", "val").
+        fmt: Image format ("jpeg" or "yuv420"). Default "jpeg".
         **kwargs: Additional arguments passed to SlipstreamDataset.
 
     Returns:
         A SlipstreamDataset instance ready for use with SlipstreamLoader.
     """
+    from pathlib import Path
     from slipstream import SlipstreamDataset
+    from slipstream.cache import CACHE_SUBDIR, MANIFEST_FILE
 
     config = get_config(name)
 
-    if split not in config.splits:
-        available = ", ".join(config.splits.keys())
+    key = (split, fmt)
+    if key not in config.remote_cache:
+        available = [f"split={s}, fmt={f}" for s, f in config.remote_cache.keys()]
         raise KeyError(
-            f"Unknown split {split!r} for dataset {name!r}. "
+            f"No remote cache for {name!r} split={split!r} fmt={fmt!r}. "
             f"Available: {available}"
         )
 
     # Set SLIPSTREAM_CACHE_DIR based on detected platform
-    configure_slipstream_cache()
+    cache_base = configure_slipstream_cache()
 
-    source_url = config.splits[split]
+    remote_cache_path = config.remote_cache[key]
+    # Derive local cache dir name from the remote path's last component
+    cache_name = remote_cache_path.rstrip("/").rsplit("/", 1)[-1]
+    local_cache_dir = Path(cache_base) / cache_name
 
-    return SlipstreamDataset(remote_dir=source_url, **kwargs)
+    # Download from S3 if not present locally
+    manifest = local_cache_dir / CACHE_SUBDIR / MANIFEST_FILE
+    if not manifest.exists():
+        from slipstream.s3_sync import download_s3_cache
+        print(f"Downloading {name} ({split}, {fmt}) from S3...")
+        success = download_s3_cache(
+            remote_cache_path,
+            local_cache_dir,
+        )
+        if not success:
+            raise RuntimeError(
+                f"Failed to download cache from {remote_cache_path}. "
+                f"Check your S3 credentials and network connection."
+            )
+
+    return SlipstreamDataset(local_dir=str(local_cache_dir), **kwargs)
