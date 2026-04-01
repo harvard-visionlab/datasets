@@ -2,13 +2,16 @@
 """Benchmark visionlab.datasets loader performance.
 
 Loads a registered dataset and runs full forward passes through
-SlipstreamLoader, reporting images/sec throughput.
+SlipstreamLoader, reporting images/sec throughput. Uses raw decoders
+(no ToTorchImage/Normalize) to measure pure decode+crop performance,
+matching slipstream's own benchmark methodology.
 
 Usage:
     uv run python benchmarks/benchmark_loader.py
     uv run python benchmarks/benchmark_loader.py --dataset imagenet1k --split val --fmt jpeg
     uv run python benchmarks/benchmark_loader.py --dataset imagenet1k --split val --fmt yuv420
     uv run python benchmarks/benchmark_loader.py --epochs 3 --batch-size 512
+    uv run python benchmarks/benchmark_loader.py --pipeline train --num-threads 12
 """
 from __future__ import annotations
 
@@ -30,28 +33,47 @@ def benchmark(
     pipeline: str,
     target_size: int,
     num_threads: int,
+    use_threading: bool,
 ):
     from visionlab.datasets import load
     from slipstream import SlipstreamLoader
-    from slipstream.pipelines import supervised_train, supervised_val
+    from slipstream.decoders import (
+        DecodeCenterCrop,
+        DecodeRandomResizedCrop,
+    )
+
+    mode = "threaded" if use_threading else "simple"
+    fmt_label = f", {fmt}" if fmt != "jpeg" else ""
 
     print(f"Dataset: {dataset_name} (split={split}, fmt={fmt})")
     print(f"Pipeline: {pipeline} (size={target_size})")
     print(f"Batch size: {batch_size}")
-    print(f"Workers: {num_threads or 'auto'}")
+    print(f"Threads: {num_threads or 'auto'}")
+    print(f"Mode: {mode}")
     print()
 
     # Load dataset (downloads from S3 if needed)
     dataset = load(dataset_name, split=split, fmt=fmt)
     print(f"Samples: {len(dataset):,}")
 
-    # Select pipeline
+    # Build pipelines using raw decoders (matches slipstream benchmarks)
     if pipeline == "val":
-        pipelines = supervised_val(target_size, num_threads=num_threads)
+        pipelines = {
+            "image": [
+                DecodeCenterCrop(target_size, num_threads=num_threads),
+            ],
+        }
+        name = f"CenterCrop ({mode}{fmt_label})"
     elif pipeline == "train":
-        pipelines = supervised_train(target_size, num_threads=num_threads)
+        pipelines = {
+            "image": [
+                DecodeRandomResizedCrop(target_size, num_threads=num_threads),
+            ],
+        }
+        name = f"RRC ({mode}{fmt_label})"
     else:
         pipelines = None
+        name = f"Raw I/O ({mode}{fmt_label})"
 
     loader = SlipstreamLoader(
         dataset,
@@ -60,6 +82,8 @@ def benchmark(
         drop_last=False,
         pipelines=pipelines,
         exclude_fields=["path"],
+        use_threading=use_threading,
+        image_format=fmt,
     )
 
     def run_epoch():
@@ -76,28 +100,29 @@ def benchmark(
         return total
 
     # Warmup
-    print(f"\nWarmup ({num_warmup} epoch(s)):")
+    print(f"\n{name}:")
+    print(f"  Warmup ({num_warmup} epoch(s)):")
     for i in range(num_warmup):
         t0 = time.perf_counter()
         total = run_epoch()
         elapsed = time.perf_counter() - t0
         rate = total / elapsed
-        print(f"  Warmup {i + 1}: {rate:,.0f} img/s ({elapsed:.2f}s)")
+        print(f"    Warmup {i + 1}: {rate:,.0f} img/s ({elapsed:.2f}s)")
 
     # Timed epochs
     rates = []
-    print(f"\nBenchmark ({num_epochs} epoch(s)):")
+    print(f"  Benchmark ({num_epochs} epoch(s)):")
     for i in range(num_epochs):
         t0 = time.perf_counter()
         total = run_epoch()
         elapsed = time.perf_counter() - t0
         rate = total / elapsed
         rates.append(rate)
-        print(f"  Epoch {i + 1}: {rate:,.0f} img/s ({elapsed:.2f}s)")
+        print(f"    Epoch {i + 1}: {rate:,.0f} img/s ({elapsed:.2f}s)")
 
     avg = np.mean(rates)
     std = np.std(rates) if len(rates) > 1 else 0
-    print(f"\nResult: {avg:,.0f} ± {std:,.0f} img/s")
+    print(f"  Average: {avg:,.0f} ± {std:,.0f} img/s")
 
     loader.shutdown()
 
@@ -125,6 +150,8 @@ def main():
                         help="Crop size (default: 224)")
     parser.add_argument("--num-threads", type=int, default=0,
                         help="Decoder threads, 0=auto (default: 0)")
+    parser.add_argument("--no-threading", action="store_true",
+                        help="Disable async prefetch threading (use simple mode)")
     args = parser.parse_args()
 
     benchmark(
@@ -137,6 +164,7 @@ def main():
         pipeline=args.pipeline,
         target_size=args.target_size,
         num_threads=args.num_threads,
+        use_threading=not args.no_threading,
     )
 
 
