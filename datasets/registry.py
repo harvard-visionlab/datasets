@@ -79,7 +79,7 @@ def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
     """
     from pathlib import Path
     from slipstream import SlipstreamDataset
-    from slipstream.cache import CACHE_SUBDIR, MANIFEST_FILE
+    from slipstream.cache import MANIFEST_FILE
 
     config = get_config(name)
 
@@ -100,7 +100,7 @@ def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
     local_cache_dir = Path(cache_base) / cache_name
 
     # Download from S3 if not present locally
-    manifest = local_cache_dir / CACHE_SUBDIR / MANIFEST_FILE
+    manifest = local_cache_dir / MANIFEST_FILE
     if not manifest.exists():
         from slipstream.s3_sync import download_s3_cache
         print(f"Downloading {name} ({split}, {fmt}) from S3...")
