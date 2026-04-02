@@ -9,8 +9,8 @@ register(DatasetConfig(
     remote_cache={
         ("val", "jpeg"): f"{REMOTE_CACHE_BASE}/imagenet1k-s256_l512-jpeg-val",
         ("val", "yuv420"): f"{REMOTE_CACHE_BASE}/imagenet1k-s256_l512-yuv420-val",
-        # ("train", "jpeg"): f"{REMOTE_CACHE_BASE}/imagenet1k-s256_l512-jpeg-train",
-        # ("train", "yuv420"): f"{REMOTE_CACHE_BASE}/imagenet1k-s256_l512-yuv420-train",
+        ("train", "jpeg"): f"{REMOTE_CACHE_BASE}/imagenet1k-s256_l512-jpeg-train",
+        ("train", "yuv420"): f"{REMOTE_CACHE_BASE}/imagenet1k-s256_l512-yuv420-train",
     },
     metadata={
         "num_train": 1_281_167,
