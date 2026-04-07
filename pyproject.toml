@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visionlab-datasets"         # <-- avoid conflict with HF 'datasets'
-version = "0.4.0"
+version = "0.4.1"
 description = "Visionlab dataset registry and preparation utilities for slipstream"
 readme = "README.md"
 authors = [

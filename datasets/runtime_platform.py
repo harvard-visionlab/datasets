@@ -25,7 +25,7 @@ class Platform(Enum):
 # Platform-specific slipstream cache directories.
 # Override with SLIPSTREAM_CACHE_DIR env var.
 PLATFORM_CACHE_DIRS = {
-    Platform.FAS_CLUSTER: "/n/alvarez_lab_tier1/Lab/datasets/slipstream",
+    Platform.FAS_CLUSTER: "/n/netscratch/alvarez_lab/Lab/datasets/slipstream",
     Platform.LIGHTNING_STUDIO: "/tmp/slipstream_cache",
     Platform.DEVCONTAINER: str(Path.home() / ".slipstream"),
     Platform.GPU_DEVBOX: str(Path.home() / ".slipstream"),
