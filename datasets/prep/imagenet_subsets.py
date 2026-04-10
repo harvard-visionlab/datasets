@@ -165,24 +165,31 @@ def build_subset_cache(
     # ------------------------------------------------------------------
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    field_types = {"image": "ImageBytes", "in1000_label": "int", "path": "str", "index": "int"}
-    for label_field_name in sub_def["label_fields"]:
-        field_types[label_field_name] = "int"
-
     # Determine image format from source cache manifest
     source_image_format = source._field_metadata.get("image", {}).get("image_format", fmt)
 
+    # Non-image field types — image is handled separately via raw byte copy
+    non_image_fields = {"in1000_label": "int", "path": "str", "index": "int"}
+    for label_field_name in sub_def["label_fields"]:
+        non_image_fields[label_field_name] = "int"
+
     writers = {}
-    for field_name, field_type in field_types.items():
-        kwargs = {}
-        if field_type == "ImageBytes":
-            kwargs["image_format"] = source_image_format
+    for field_name, field_type in non_image_fields.items():
         writers[field_name] = _create_field_writer(
-            field_name, field_type, output_dir, num_subset, **kwargs
+            field_name, field_type, output_dir, num_subset,
         )
 
-    # Access source image storage for byte-level reads
+    # --- Raw image copy (no decode/encode) ---
+    # Copy image bytes directly from source cache, preserving format as-is.
+    # This avoids ImageBytesWriter.add_sample() which tries to detect and
+    # transcode image formats (breaks for YUV420 raw bytes).
+    from slipstream.cache import VARIABLE_METADATA_DTYPE
+
     img_storage = source.fields["image"]
+    new_img_meta = np.zeros(num_subset, dtype=VARIABLE_METADATA_DTYPE)
+    max_img_size = 0
+    img_data_file = open(output_dir / "image.bin", "wb")
+    current_ptr = 0
 
     # Access source path storage
     path_storage = source.fields["path"]
@@ -191,12 +198,17 @@ def build_subset_cache(
         if verbose and out_idx % 5000 == 0 and out_idx > 0:
             print(f"  {out_idx}/{num_subset} samples written...")
 
-        # Image bytes
-        meta = img_storage._metadata[src_idx]
-        ptr = int(meta["data_ptr"])
-        size = int(meta["data_size"])
-        img_bytes = bytes(img_storage._data_mmap[ptr:ptr + size])
-        writers["image"].add_sample(out_idx, img_bytes)
+        # Image: raw byte copy from source mmap
+        src_meta = img_storage._metadata[src_idx]
+        ptr = int(src_meta["data_ptr"])
+        size = int(src_meta["data_size"])
+        img_data_file.write(img_storage._data_mmap[ptr:ptr + size])
+        new_img_meta[out_idx]["data_ptr"] = current_ptr
+        new_img_meta[out_idx]["data_size"] = size
+        new_img_meta[out_idx]["height"] = src_meta["height"]
+        new_img_meta[out_idx]["width"] = src_meta["width"]
+        current_ptr += size
+        max_img_size = max(max_img_size, size)
 
         # In1000 label (original)
         in1000_label = int(subset_in1000_labels[out_idx])
@@ -214,10 +226,21 @@ def build_subset_cache(
         # Index (renumbered)
         writers["index"].add_sample(out_idx, out_idx)
 
+    # Finalize image field
+    img_data_file.flush()
+    img_data_file.close()
+    np.save(output_dir / "image.meta.npy", new_img_meta)
+    image_field_meta = {
+        "type": "ImageBytes",
+        "num_samples": num_subset,
+        "max_size": int(max_img_size * 1.2),
+        "image_format": source_image_format,
+    }
+
     # ------------------------------------------------------------------
     # 5. Finalize writers and write manifest
     # ------------------------------------------------------------------
-    field_metadata = {}
+    field_metadata = {"image": image_field_meta}
     for field_name, writer in writers.items():
         field_metadata[field_name] = writer.finalize()
 
