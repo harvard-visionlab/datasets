@@ -21,6 +21,7 @@ register(DatasetConfig(
         ("train", "yuv420"): f"{REMOTE_CACHE_BASE}/imagenet10-s256_l512-yuv420-train",
     },
     metadata={
+        "num_train": 12_964,
         "num_val": 500,
         "preprocessing": "s256_l512_q100",
         "in10_to_in1000": IN10_TO_IN1000,
