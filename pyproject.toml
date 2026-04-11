@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visionlab-datasets"         # <-- avoid conflict with HF 'datasets'
-version = "0.4.1"
+dynamic = ["version"]
 description = "Visionlab dataset registry and preparation utilities for slipstream"
 readme = "README.md"
 authors = [
@@ -58,6 +58,9 @@ explicit = true
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+[tool.setuptools.dynamic]
+version = {attr = "datasets.version.__version__"}
 
 [tool.setuptools]
 # We map the top-level import 'visionlab.datasets' to your folder 'datasets'

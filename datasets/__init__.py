@@ -9,6 +9,7 @@ Quick start::
     from slipstream.pipelines import supervised_val
     loader = SlipstreamLoader(dataset, batch_size=256, pipelines=supervised_val(224))
 """
+from .version import __version__
 # Registry and load function
 from .registry import (
     DatasetConfig,
