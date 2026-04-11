@@ -29,7 +29,10 @@ register(DatasetConfig(
                 "mean": (0.485, 0.456, 0.406),
                 "std": (0.229, 0.224, 0.225),
             },
-            "yuv420": None,  # TODO: compute from train split
+            "yuv420": {
+                "mean": (0.455585, 0.470487, 0.515044),
+                "std": (0.264127, 0.068042, 0.064571),
+            }
         },
         "in10_to_in1000": IN10_TO_IN1000,
         "in10_to_in100": IN10_TO_IN100,
