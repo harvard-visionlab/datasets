@@ -26,13 +26,10 @@ register(DatasetConfig(
         "preprocessing": "s256_l512_q100",
         "stats": {
             "jpeg": {
-                "mean": (0.465758, 0.404498, 0.371683),
-                "std": (0.292245, 0.288633, 0.294878),
+                "mean": (0.485, 0.456, 0.406),
+                "std": (0.229, 0.224, 0.225),
             },
-            "yuv420": {
-                "mean": (0.417238, 0.472565, 0.532571),
-                "std": (0.279268, 0.066566, 0.078346),
-            },
+            "yuv420": None,  # TODO: compute from train split
         },
         "in10_to_in1000": IN10_TO_IN1000,
         "in10_to_in100": IN10_TO_IN100,

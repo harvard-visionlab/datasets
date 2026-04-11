@@ -17,9 +17,9 @@ cache_base = Path(get_platform_cache_dir())
 print(f"Cache base: {cache_base}")
 
 DATASETS = {
-    "imagenet1k": "imagenet1k-s256_l512-{fmt}-val",
-    "imagenet100": "imagenet100-s256_l512-{fmt}-val",
-    "imagenet10": "imagenet10-s256_l512-{fmt}-val",
+    "imagenet1k": "imagenet1k-s256_l512-{fmt}-train",
+    "imagenet100": "imagenet100-s256_l512-{fmt}-train",
+    "imagenet10": "imagenet10-s256_l512-{fmt}-train",
 }
 
 FORMATS = ["jpeg", "yuv420"]
