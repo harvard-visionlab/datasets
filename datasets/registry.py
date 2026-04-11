@@ -75,7 +75,9 @@ def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
         **kwargs: Additional arguments passed to SlipstreamDataset.
 
     Returns:
-        A SlipstreamDataset instance ready for use with SlipstreamLoader.
+        A SlipstreamDataset instance with a ``.stats`` attribute containing
+        ``{"mean": (R, G, B), "std": (R, G, B)}`` for the requested format,
+        or ``None`` if stats have not been computed yet.
     """
     from pathlib import Path
     from slipstream import SlipstreamDataset
@@ -114,4 +116,10 @@ def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
                 f"Check your S3 credentials and network connection."
             )
 
-    return SlipstreamDataset(local_dir=str(local_cache_dir), **kwargs)
+    dataset = SlipstreamDataset(local_dir=str(local_cache_dir), **kwargs)
+
+    # Attach normalization stats for the requested format
+    all_stats = config.metadata.get("stats", {})
+    dataset.stats = all_stats.get(fmt)
+
+    return dataset

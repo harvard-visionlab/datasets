@@ -22,7 +22,8 @@ DATASETS = {
     "imagenet10": "imagenet10-s256_l512-{fmt}-train",
 }
 
-FORMATS = ["jpeg", "yuv420"]
+# Only compute YUV420 stats — JPEG uses standard ImageNet values.
+FORMATS = ["yuv420"]
 
 for ds_name, pattern in DATASETS.items():
     print(f"\n{'='*60}")
