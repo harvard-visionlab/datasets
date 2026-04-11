@@ -23,6 +23,16 @@ register(DatasetConfig(
         "num_train": 126_689,
         "num_val": 5_000,
         "preprocessing": "s256_l512_q100",
+        "stats": {
+            "jpeg": {
+                "mean": (0.472533, 0.446578, 0.393662),
+                "std": (0.270375, 0.265208, 0.275879),
+            },
+            "yuv420": {
+                "mean": (0.446405, 0.468381, 0.516477),
+                "std": (0.259908, 0.063957, 0.059405),
+            },
+        },
         "in100_to_in1000": IN100_TO_IN1000,
         "label_fields": ["label", "in100_label", "in1000_label"],
     },

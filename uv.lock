@@ -3373,8 +3373,8 @@ dev = [
 
 [[package]]
 name = "visionlab-slipstream"
-version = "0.3.3"
-source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=main#d03349714a1322a6e288826f69de3f44106d93ca" }
+version = "0.3.4"
+source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=main#f720a911730d45505149d66244001dd770ce5177" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },
