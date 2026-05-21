@@ -23,8 +23,11 @@ register(DatasetConfig(
         "num_train": 126_689,
         "num_val": 5_000,
         "preprocessing": "s256_l512_q100",
+        # Normalization stats keyed by DECODED colorspace:
+        #   rgb    = stats of the decoded RGB output (the common path).
+        #   yuv420 = stats of the raw YUV planes (only for DecodeYUV* consumers).
         "stats": {
-            "jpeg": {
+            "rgb": {
                 "mean": (0.485, 0.456, 0.406),
                 "std": (0.229, 0.224, 0.225),
             },

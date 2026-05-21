@@ -75,9 +75,15 @@ def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
         **kwargs: Additional arguments passed to SlipstreamDataset.
 
     Returns:
-        A SlipstreamDataset instance with a ``.stats`` attribute containing
-        ``{"mean": (R, G, B), "std": (R, G, B)}`` for the requested format,
-        or ``None`` if stats have not been computed yet.
+        A SlipstreamDataset instance with normalization stats attached:
+
+        - ``.stats``: ``{"mean": (R, G, B), "std": (R, G, B)}`` for the
+          decoded RGB output (the common decode path), or ``None`` if stats
+          have not been computed yet. These are correct regardless of the
+          storage ``fmt`` because every ``Decode*`` path emits RGB.
+        - ``.stats_by_colorspace``: per-colorspace stats, e.g. ``"rgb"`` and
+          ``"yuv420"``. The ``"yuv420"`` entry is only correct for consumers
+          that keep YUV planes (the niche ``DecodeYUV*`` decoders).
     """
     from pathlib import Path
     from slipstream import SlipstreamDataset
@@ -118,8 +124,12 @@ def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
 
     dataset = SlipstreamDataset(local_dir=str(local_cache_dir), **kwargs)
 
-    # Attach normalization stats for the requested format
+    # Normalization stats depend on the DECODED colorspace (chosen by the
+    # decoder/pipeline downstream), not the storage `fmt`. Every Decode* path
+    # emits RGB; only DecodeYUV* keeps YUV planes. Expose all colorspaces and
+    # default `.stats` to rgb (the common decode path).
     all_stats = config.metadata.get("stats", {})
-    dataset.stats = all_stats.get(fmt)
+    dataset.stats_by_colorspace = all_stats
+    dataset.stats = all_stats.get("rgb")
 
     return dataset
