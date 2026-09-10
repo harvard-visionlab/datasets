@@ -648,6 +648,31 @@ def cmd_path(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _download_kwargs(download_fn, concurrency: int | None, part_size: int | None) -> dict:
+    """s5cmd per-file tuning, passed only if the installed slipstream accepts it (>= 0.5.0).
+
+    Default concurrency=1 (sequential writes per file): NFS volumes such as
+    /n/lab_storage collapse to a few MB/s under s5cmd's default 5 concurrent
+    50 MB part writes, while sequential writes run near line rate. Files are
+    still downloaded in parallel across ``--numworkers``.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(download_fn).parameters
+    except (TypeError, ValueError):  # pragma: no cover
+        params = {}
+    wanted = {"concurrency": concurrency, "part_size_mb": part_size}
+    out = {k: v for k, v in wanted.items() if v is not None and k in params}
+    dropped = [k for k, v in wanted.items() if v is not None and k not in params]
+    if dropped:
+        _print(
+            f"  {WARN} installed slipstream ignores {', '.join(dropped)} "
+            "(upgrade visionlab-slipstream >= 0.5.0 for per-file s5cmd tuning)"
+        )
+    return out
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     _slipstream_cli()  # fail early with the upgrade hint if slipstream is too old
     from slipstream.s3_sync import download_s3_cache  # type: ignore
@@ -717,6 +742,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         _print("[dry-run] nothing downloaded")
         return 0
 
+    dl_kwargs = _download_kwargs(download_s3_cache, args.concurrency, args.part_size)
     failed = 0
     for e in todo:
         _print()
@@ -726,6 +752,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             endpoint_url=args.endpoint_url,
             numworkers=args.numworkers,
             verbose=True,
+            **dl_kwargs,
         )
         if ok:
             check_local(e)
@@ -813,6 +840,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Re-download even if present and intact")
     sp.add_argument("--dry-run", action="store_true", help="Show what would be downloaded")
     sp.add_argument("--numworkers", type=int, default=32, help="s5cmd parallel workers (default: 32)")
+    sp.add_argument(
+        "--concurrency", type=int, default=1,
+        help="s5cmd concurrent parts per file (default: 1 = sequential writes; "
+        "s5cmd's default 5 is very slow on some NFS volumes, e.g. /n/lab_storage)",
+    )
+    sp.add_argument("--part-size", type=int, default=None, help="s5cmd multipart size in MiB (default: s5cmd's 50)")
     sp.add_argument("--endpoint-url", default=None, help="S3-compatible endpoint URL")
     sp.set_defaults(func=cmd_sync)
     return p

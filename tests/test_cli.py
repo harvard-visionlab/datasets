@@ -467,3 +467,28 @@ def test_fas_cluster_default_is_persistent_storage():
 
     assert PLATFORM_CACHE_DIRS[Platform.FAS_CLUSTER] == "/n/lab_storage/alvarez_lab/Lab/datasets/slipstream"
     assert "netscratch" not in PLATFORM_CACHE_DIRS[Platform.FAS_CLUSTER]
+
+
+def test_sync_passes_concurrency_when_supported(env, monkeypatch, capsys):
+    import slipstream.s3_sync
+
+    seen = {}
+
+    def fake_download(remote, local, endpoint_url=None, numworkers=32, verbose=True,
+                      concurrency=None, part_size_mb=None):
+        seen.update(concurrency=concurrency, part_size_mb=part_size_mb, numworkers=numworkers)
+        make_cache(Path(local).parent, Path(local).name, num_samples=99)
+        return True
+
+    monkeypatch.setattr(slipstream.s3_sync, "download_s3_cache", fake_download)
+    assert cli.main(["sync", "imagenet10", "val", "jpeg", "--part-size", "128", "--numworkers", "8"]) == 0
+    assert seen == {"concurrency": 1, "part_size_mb": 128, "numworkers": 8}
+    assert "ignores" not in capsys.readouterr().out
+
+
+def test_sync_drops_concurrency_on_old_slipstream(env, capsys):
+    # fixture's fake_download has the 0.4.5 signature (no concurrency kwarg)
+    assert cli.main(["sync", "imagenet10", "val", "jpeg", "--concurrency", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "installed slipstream ignores concurrency" in out
+    assert env.downloads and env.downloads[0][1].name == "imagenet10-s256_l512-jpeg-val"
