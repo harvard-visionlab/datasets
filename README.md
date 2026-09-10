@@ -27,22 +27,23 @@ already present (and where), and whether you can read the local cache and the
 S3 bucket:
 
 ```bash
-uv run visionlab-datasets status            # cache dir + permissions, S3 access, per-dataset table
-uv run visionlab-datasets status --paths    # ...plus full local path of every present cache
+uv run visionlab-datasets status              # cache dir + permissions, S3 access, per-dataset table
+uv run visionlab-datasets status --paths      # ...plus full local path of every present cache
 uv run visionlab-datasets status --no-remote  # offline (skip S3 checks)
-uv run visionlab-datasets list              # registered datasets and their S3 caches
-uv run visionlab-datasets path in100 val    # local cache path(s) for a dataset
+uv run visionlab-datasets list                # registered datasets and their S3 caches
+uv run visionlab-datasets path imagenet100 val   # local cache path(s) for a dataset
 ```
 
-Download caches (default: `val` split, `jpeg` format):
+Download caches: `sync <dataset> <splits> <fmt>`, where splits/formats are
+comma lists or `all`:
 
 ```bash
-uv run visionlab-datasets sync in100 train,val
-uv run visionlab-datasets sync in1k val --fmt all --dry-run
+uv run visionlab-datasets sync imagenet100 train,val jpeg
+uv run visionlab-datasets sync imagenet1k val all --dry-run
 ```
 
-Dataset aliases: `in10`, `in100`, `in1k`, `in100_s292` (full registry names work too).
-Splits/formats are comma lists or `all`. Also available as `python -m visionlab.datasets`.
+Dataset names are the registry names shown by `list`; short aliases `in10`, `in100`,
+`in1k`, `in100_s292` are accepted too. Also available as `python -m visionlab.datasets`.
 
 This CLI is the one lab members should use: visionlab-datasets owns the registry of
 lab-supported datasets (names, splits, formats, S3 cache locations, per-platform cache

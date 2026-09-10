@@ -177,12 +177,11 @@ def test_status_table_and_paths(env, capsys):
     assert rc == 0, out
     assert f"path        {env.root}" in out
     assert "source      SLIPSTREAM_CACHE_DIR environment variable" in out
-    assert "platforms   (default cache dir per platform" in out
     assert "identity    -  (remote checks skipped)" in out
     # present entry, missing entry, remote unchecked
     assert "imagenet10        val    jpeg    ✓" in out
     assert "imagenet10        train  jpeg    ✗ missing" in out
-    assert "to fetch:   visionlab-datasets sync in10 val --fmt yuv420" in out  # first missing entry
+    assert "to fetch:   visionlab-datasets sync imagenet10 val yuv420" in out  # first missing entry
     assert "registered but no remote caches yet: imagenette" in out
     assert "Local cache paths" in out
     assert str(env.root / "imagenet10-s256_l512-jpeg-val") in out
@@ -254,11 +253,13 @@ def test_list_text(capsys):
 
 def test_path_prints_local_paths(env, capsys):
     make_cache(env.root, "imagenet10-s256_l512-jpeg-val")
-    assert cli.main(["path", "in10", "all"]) == 0
+    assert cli.main(["path", "in10", "all"]) == 0  # default: all formats
     out = capsys.readouterr().out.splitlines()
-    assert out == [  # SPLITS order: train, val
+    assert out == [  # SPLITS x FMTS order
         f"✗ imagenet10 train jpeg  {env.root / 'imagenet10-s256_l512-jpeg-train'}",
+        f"✗ imagenet10 train yuv420  {env.root / 'imagenet10-s256_l512-yuv420-train'}",
         f"✓ imagenet10 val jpeg  {env.root / 'imagenet10-s256_l512-jpeg-val'}",
+        f"✗ imagenet10 val yuv420  {env.root / 'imagenet10-s256_l512-yuv420-val'}",
     ]
 
 
@@ -280,7 +281,7 @@ def test_path_no_such_combo(env):
 
 def test_sync_dry_run_expands_splits_and_fmts(env, capsys):
     make_cache(env.root, "imagenet100-s256_l512-jpeg-val")
-    rc = cli.main(["sync", "in100", "train,val", "--fmt", "all", "--dry-run"])
+    rc = cli.main(["sync", "imagenet100", "train,val", "all", "--dry-run"])
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "✓ imagenet100-s256_l512-jpeg-val: already present" in out
@@ -294,7 +295,7 @@ def test_sync_dry_run_expands_splits_and_fmts(env, capsys):
 
 
 def test_sync_downloads_and_verifies(env, capsys):
-    rc = cli.main(["sync", "in10", "val"])
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
     out = capsys.readouterr().out
     assert rc == 0, out
     assert env.downloads == [
@@ -306,8 +307,17 @@ def test_sync_downloads_and_verifies(env, capsys):
     assert f"✓ imagenet10-s256_l512-jpeg-val -> {env.root / 'imagenet10-s256_l512-jpeg-val'}" in out
 
 
-def test_sync_defaults_to_val_jpeg(env):
-    cli.main(["sync", "in10"])
+def test_sync_requires_splits_and_fmt(env, capsys):
+    for argv in (["sync", "imagenet10"], ["sync", "imagenet10", "val"]):
+        with pytest.raises(SystemExit) as ei:
+            cli.main(argv)
+        assert ei.value.code == 2
+    assert "required: splits, fmt" in capsys.readouterr().err
+    assert env.downloads == []
+
+
+def test_sync_accepts_alias(env):
+    cli.main(["sync", "in10", "val", "jpeg"])
     assert [p.name for _, p in env.downloads] == ["imagenet10-s256_l512-jpeg-val"]
 
 
@@ -324,7 +334,7 @@ def test_sync_skips_unregistered_combo_with_warning(env, capsys):
     )
     register(partial)
     try:
-        rc = cli.main(["sync", "partial10", "train,val", "--dry-run"])
+        rc = cli.main(["sync", "partial10", "train,val", "jpeg", "--dry-run"])
         out = capsys.readouterr().out
         assert rc == 0, out
         assert "⚠ partial10: no train/jpeg cache registered, skipping" in out
@@ -334,7 +344,7 @@ def test_sync_skips_unregistered_combo_with_warning(env, capsys):
 
 def test_sync_remote_denied(env, capsys):
     env.remote_error = Exception("AccessDenied: nope")
-    rc = cli.main(["sync", "in10", "val"])
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
     out = capsys.readouterr().out
     assert rc == 1
     assert "✗ imagenet10-s256_l512-jpeg-val: remote denied" in out
@@ -343,13 +353,13 @@ def test_sync_remote_denied(env, capsys):
 
 def test_sync_unknown_dataset(env):
     with pytest.raises(SystemExit):
-        cli.main(["sync", "cifar"])
+        cli.main(["sync", "cifar", "val", "jpeg"])
     assert env.downloads == []
 
 
 def test_sync_dataset_without_caches(env):
     with pytest.raises(SystemExit) as ei:
-        cli.main(["sync", "imagenette", "val"])
+        cli.main(["sync", "imagenette", "val", "jpeg"])
     assert "no cache" in str(ei.value)
 
 
@@ -422,7 +432,7 @@ def test_no_color_flag_and_piped_output_plain(env, capsys):
     assert "\033[32m✓\033[0m imagenet10 val jpeg" in capsys.readouterr().out
 
 
-def test_platform_dirs_are_unexpanded_and_listed_one_per_line(env, capsys, monkeypatch):
+def test_platform_dirs_are_unexpanded_and_not_printed(env, capsys, monkeypatch):
     from visionlab.datasets.runtime_platform import PLATFORM_CACHE_DIRS, Platform, get_platform_cache_dir
 
     assert PLATFORM_CACHE_DIRS[Platform.CPU_WORKSTATION] == "~/.slipstream"
@@ -431,7 +441,5 @@ def test_platform_dirs_are_unexpanded_and_listed_one_per_line(env, capsys, monke
         assert get_platform_cache_dir(Platform.CPU_WORKSTATION) == str(Path.home() / ".slipstream")
     cli.main(["status", "--no-remote"])
     out = capsys.readouterr().out
-    assert "  platforms   (default cache dir per platform; ~ is that machine's home)" in out
-    assert "    fas_cluster       /n/netscratch/alvarez_lab/Lab/datasets/slipstream" in out
-    assert "    gpu_devbox        ~/.slipstream" in out
-    assert "<- this machine" not in out  # env var set in fixture, so no platform default is in use
+    assert "platforms" not in out
+    assert "Cache directory  (slipstream caches on this machine live here)" in out
