@@ -73,6 +73,12 @@ def _slipstream_cli():
     return scli
 
 
+def _pub(scli, name: str):
+    """Prefer slipstream.cli's public name, fall back to the underscore one (< 0.4.6)."""
+    fn = getattr(scli, name, None) or getattr(scli, "_" + name)
+    return fn
+
+
 def resolve_name(name: str) -> str:
     """Map an alias or registry name (case/dash-insensitive) to a registry name."""
     key = name.strip().lower().replace("-", "_")
@@ -147,7 +153,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             + ", ".join(f"{a}={ALIASES[a]}" for a in PRIMARY_ALIASES if a in status["aliases"])
         )
         print("  fetch:   visionlab-datasets sync in100 train,val [--fmt jpeg|yuv420|all]")
-    probs = scli._problems(status)
+    probs = _pub(scli, "problems")(status)
     hard = [m for m in probs if "will be created" not in m and "not installed" not in m]
     return 1 if hard else 0
 
@@ -184,7 +190,7 @@ def cmd_path(args: argparse.Namespace) -> int:
     name = resolve_name(args.dataset)
     splits = parse_list(args.splits, SPLITS, list(SPLITS))
     fmts = parse_list(args.fmt, FMTS, ["jpeg"])
-    cache = scli.resolve_cache_dir(scli._import_registry())
+    cache = scli.resolve_cache_dir(_pub(scli, "import_registry")())
     cache_base = Path(args.dest) if args.dest else Path(cache.path)
     cfg = get_config(name)
     found = 0
@@ -314,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if getattr(args, "no_color", False) or getattr(args, "func", None) in (cmd_sync, cmd_status):
         try:
-            _slipstream_cli()._configure_color(getattr(args, "no_color", False))
+            _pub(_slipstream_cli(), "configure_color")(getattr(args, "no_color", False))
         except SystemExit:
             pass  # cmd_* will re-raise with the upgrade message
     try:
