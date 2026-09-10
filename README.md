@@ -20,6 +20,38 @@ uv pip install git+https://github.com/harvard-visionlab/datasets.git
 
 ## Usage
 
+### Command line
+
+Check where the slipstream cache lives on this machine, which lab datasets are
+already present (and where), and whether you can read the local cache and the
+S3 bucket:
+
+```bash
+uv run visionlab-datasets status            # cache dir + permissions, S3 access, per-dataset table
+uv run visionlab-datasets status --paths    # ...plus full local path of every present cache
+uv run visionlab-datasets status --no-remote  # offline (skip S3 checks)
+uv run visionlab-datasets list              # registered datasets and their S3 caches
+uv run visionlab-datasets path in100 val    # local cache path(s) for a dataset
+```
+
+Download caches (default: `val` split, `jpeg` format):
+
+```bash
+uv run visionlab-datasets sync in100 train,val
+uv run visionlab-datasets sync in1k val --fmt all --dry-run
+```
+
+Dataset aliases: `in10`, `in100`, `in1k`, `in100_s292` (full registry names work too).
+Splits/formats are comma lists or `all`. Also available as `python -m visionlab.datasets`
+and, with the same checks but without aliases, as `slipstream status` / `slipstream sync`
+from the `visionlab-slipstream` package.
+
+Cache directory resolution: `SLIPSTREAM_CACHE_DIR` if set, else a per-platform default
+(`/n/netscratch/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster, `~/.slipstream`
+on workstations/devboxes/devcontainers, `/tmp/slipstream_cache` on Lightning Studio).
+
+### Python
+
 ```python
 from visionlab.datasets import StreamingDataset
 ```

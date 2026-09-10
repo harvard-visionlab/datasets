@@ -25,6 +25,9 @@ dependencies = [
     "numpy",
 ]
 
+[project.scripts]
+visionlab-datasets = "visionlab.datasets.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest",
