@@ -53,8 +53,10 @@ Adding a dataset means adding a config under `datasets/_configs/`; it then appea
 `status`, `list`, `path`, and `sync` automatically.
 
 Cache directory resolution: `SLIPSTREAM_CACHE_DIR` if set, else a per-platform default
-(`/n/netscratch/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster, `~/.slipstream`
+(`/n/lab_storage/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster, `~/.slipstream`
 on workstations/devboxes/devcontainers, `/tmp/slipstream_cache` on Lightning Studio).
+Do not point the cache at netscratch: it culls unused files monthly, leaving empty cache
+dirs behind (`status` reports these as `empty dir`).
 
 ### Python
 

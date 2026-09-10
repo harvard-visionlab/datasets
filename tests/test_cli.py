@@ -443,3 +443,27 @@ def test_platform_dirs_are_unexpanded_and_not_printed(env, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "platforms" not in out
     assert "Cache directory  (slipstream caches on this machine live here)" in out
+
+
+def test_status_reports_culled_dir_as_empty(env, capsys):
+    (env.root / "imagenet10-s256_l512-jpeg-val").mkdir()  # dir survives a cull, files don't
+    rc = cli.main(["status", "--no-remote"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "imagenet10        val    jpeg    ✗ empty dir" in out
+    assert "1 cache dir(s) exist without manifest.json" in out
+
+
+def test_sync_redownloads_empty_dir(env, capsys):
+    (env.root / "imagenet10-s256_l512-jpeg-val").mkdir()
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg", "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "dir exists but no manifest (culled?)" in out
+
+
+def test_fas_cluster_default_is_persistent_storage():
+    from visionlab.datasets.runtime_platform import PLATFORM_CACHE_DIRS, Platform
+
+    assert PLATFORM_CACHE_DIRS[Platform.FAS_CLUSTER] == "/n/lab_storage/alvarez_lab/Lab/datasets/slipstream"
+    assert "netscratch" not in PLATFORM_CACHE_DIRS[Platform.FAS_CLUSTER]

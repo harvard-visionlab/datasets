@@ -237,7 +237,7 @@ class DatasetEntry:
     remote: str
     local_path: str
     expected_samples: int | None = None  # registry metadata num_{split}
-    local_status: str = "missing"  # ok | incomplete | missing | unreadable
+    local_status: str = "missing"  # ok | incomplete | empty | missing | unreadable
     local_problems: list[str] = field(default_factory=list)
     local_bytes: int | None = None
     num_samples: int | None = None
@@ -285,7 +285,8 @@ def check_local(entry: DatasetEntry) -> None:
     manifest = path / MANIFEST_FILE
     entry.local_problems = []
     if not manifest.exists():
-        entry.local_status = "missing"
+        # A directory with no manifest is what a scratch-filesystem cull leaves behind.
+        entry.local_status = "empty" if path.is_dir() else "missing"
         return
     if not os.access(manifest, os.R_OK) or not os.access(path, os.R_OK | os.X_OK):
         entry.local_status = "unreadable"
@@ -430,6 +431,8 @@ def _mark(ok: bool | None) -> str:
 
 
 def print_status(status: dict, *, paths: bool = False) -> None:
+    from slipstream.cache import MANIFEST_FILE  # type: ignore
+
     p = _print
     c = status["cache"]
     a = c["access"]
@@ -499,6 +502,8 @@ def print_status(status: dict, *, paths: bool = False) -> None:
                 local = f"{WARN} incomplete"
             elif ls == "unreadable":
                 local = f"{BAD} unreadable"
+            elif ls == "empty":
+                local = f"{BAD} empty dir"
             else:
                 local = f"{BAD} missing"
             rs = e["remote_status"]
@@ -522,6 +527,13 @@ def print_status(status: dict, *, paths: bool = False) -> None:
         errs = [e for e in entries if e["remote_status"] in ("denied", "error")]
         if errs:
             p(f"  {WARN} remote error example ({errs[0]['cache_name']}): {errs[0]['remote_error']}")
+        empty = [e for e in entries if e["local_status"] == "empty"]
+        if empty:
+            p(
+                f"  {WARN} {len(empty)} cache dir(s) exist without {MANIFEST_FILE} "
+                "(files culled by the filesystem, or a download that never finished); "
+                "sync re-downloads them"
+            )
         missing = [e for e in entries if e["local_status"] != "ok"]
         if missing:
             ex = missing[0]
@@ -668,6 +680,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         check_remote(e, endpoint_url=args.endpoint_url, profile=os.environ.get("AWS_PROFILE"))
         state = {
             "missing": "not present locally",
+            "empty": "dir exists but no manifest (culled?)",
             "incomplete": "incomplete locally",
             "unreadable": "unreadable locally",
         }.get(e.local_status, "re-download")

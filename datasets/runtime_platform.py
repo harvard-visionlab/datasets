@@ -27,7 +27,8 @@ class Platform(Enum):
 # Override with SLIPSTREAM_CACHE_DIR env var.
 CACHE_DIR_ENV_VAR = "SLIPSTREAM_CACHE_DIR"
 PLATFORM_CACHE_DIRS = {
-    Platform.FAS_CLUSTER: "/n/netscratch/alvarez_lab/Lab/datasets/slipstream",
+    # Persistent tier-1 lab storage. NOT netscratch: it culls unused files monthly.
+    Platform.FAS_CLUSTER: "/n/lab_storage/alvarez_lab/Lab/datasets/slipstream",
     Platform.LIGHTNING_STUDIO: "/tmp/slipstream_cache",
     Platform.DEVCONTAINER: "~/.slipstream",
     Platform.GPU_DEVBOX: "~/.slipstream",
