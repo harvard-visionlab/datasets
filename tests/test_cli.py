@@ -492,3 +492,16 @@ def test_sync_drops_concurrency_on_old_slipstream(env, capsys):
     out = capsys.readouterr().out
     assert "installed slipstream ignores concurrency" in out
     assert env.downloads and env.downloads[0][1].name == "imagenet10-s256_l512-jpeg-val"
+
+
+def test_status_detects_inflight_download(env, capsys, monkeypatch):
+    from slipstream.cache import OptimizedCache
+
+    d = make_cache(env.root, "imagenet100-s256_l512-yuv420-train")
+    (d / "image.bin3335549746").write_bytes(b"x" * 2048)  # s5cmd temp file
+    monkeypatch.setattr(OptimizedCache, "check_integrity", staticmethod(lambda p: (False, ["missing: image.bin"])))
+    cli.main(["status", "--no-remote"])
+    out = capsys.readouterr().out
+    assert "imagenet100       train  yuv420  ⚠ downloading" in out
+    assert "download in progress: image.bin (2.0 KB so far)" in out
+    assert "missing: image.bin" not in out

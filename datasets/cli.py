@@ -31,6 +31,7 @@ import getpass
 import json
 import os
 import platform as _platform
+import re
 import socket
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -237,7 +238,7 @@ class DatasetEntry:
     remote: str
     local_path: str
     expected_samples: int | None = None  # registry metadata num_{split}
-    local_status: str = "missing"  # ok | incomplete | empty | missing | unreadable
+    local_status: str = "missing"  # ok | incomplete | downloading | empty | missing | unreadable
     local_problems: list[str] = field(default_factory=list)
     local_bytes: int | None = None
     num_samples: int | None = None
@@ -295,6 +296,18 @@ def check_local(entry: DatasetEntry) -> None:
     ok, problems = OptimizedCache.check_integrity(path)
     entry.local_status = "ok" if ok else "incomplete"
     entry.local_problems = list(problems)
+    if not ok:
+        # s5cmd writes "<name><digits>" and renames on completion: a live download.
+        inflight = [
+            q for q in path.iterdir()
+            if q.is_file() and re.fullmatch(r"(.+\.(?:bin|npy|json))\d+", q.name)
+        ]
+        if inflight:
+            entry.local_status = "downloading"
+            entry.local_problems = [
+                f"download in progress: {re.sub(r'\d+$', '', q.name)} ({fmt_bytes(q.stat().st_size)} so far)"
+                for q in inflight
+            ]
     try:
         with open(manifest) as f:
             entry.num_samples = int(json.load(f).get("num_samples"))
@@ -500,6 +513,8 @@ def print_status(status: dict, *, paths: bool = False) -> None:
                 local = f"{OK} {fmt_bytes(e['local_bytes']):>9}"
             elif ls == "incomplete":
                 local = f"{WARN} incomplete"
+            elif ls == "downloading":
+                local = f"{WARN} downloading"
             elif ls == "unreadable":
                 local = f"{BAD} unreadable"
             elif ls == "empty":
@@ -706,6 +721,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         state = {
             "missing": "not present locally",
             "empty": "dir exists but no manifest (culled?)",
+            "downloading": "download already in progress elsewhere",
             "incomplete": "incomplete locally",
             "unreadable": "unreadable locally",
         }.get(e.local_status, "re-download")
