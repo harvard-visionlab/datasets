@@ -456,7 +456,10 @@ def print_status(status: dict, *, paths: bool = False) -> None:
     p(f"  source      {c['source']}")
     p(f"  {CACHE_DIR_ENV_VAR}  {c['env_var'] or '(not set)'}")
     if c.get("platform_dirs"):
-        p("  platforms   " + ", ".join(f"{k}={v}" for k, v in c["platform_dirs"].items()))
+        p("  platforms   (default cache dir per platform; ~ is that machine's home)")
+        for k, v in c["platform_dirs"].items():
+            here = "   <- this machine" if k == c.get("platform") and not c.get("env_var") else ""
+            p(f"    {k:<18}{v}{here}")
     if a.get("error"):
         p(f"  exists      {BAD}  {a['error']}")
     elif a["exists"]:

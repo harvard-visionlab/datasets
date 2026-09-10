@@ -22,15 +22,16 @@ class Platform(Enum):
     CPU_WORKSTATION = "cpu_workstation"
 
 
-# Platform-specific slipstream cache directories.
+# Platform-specific slipstream cache directories (unexpanded; ``~`` is the
+# current machine's home). Expanded by get_platform_cache_dir().
 # Override with SLIPSTREAM_CACHE_DIR env var.
 CACHE_DIR_ENV_VAR = "SLIPSTREAM_CACHE_DIR"
 PLATFORM_CACHE_DIRS = {
     Platform.FAS_CLUSTER: "/n/netscratch/alvarez_lab/Lab/datasets/slipstream",
     Platform.LIGHTNING_STUDIO: "/tmp/slipstream_cache",
-    Platform.DEVCONTAINER: str(Path.home() / ".slipstream"),
-    Platform.GPU_DEVBOX: str(Path.home() / ".slipstream"),
-    Platform.CPU_WORKSTATION: str(Path.home() / ".slipstream"),
+    Platform.DEVCONTAINER: "~/.slipstream",
+    Platform.GPU_DEVBOX: "~/.slipstream",
+    Platform.CPU_WORKSTATION: "~/.slipstream",
 }
 
 

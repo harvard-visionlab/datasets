@@ -177,7 +177,7 @@ def test_status_table_and_paths(env, capsys):
     assert rc == 0, out
     assert f"path        {env.root}" in out
     assert "source      SLIPSTREAM_CACHE_DIR environment variable" in out
-    assert "platforms   fas_cluster=" in out
+    assert "platforms   (default cache dir per platform" in out
     assert "identity    -  (remote checks skipped)" in out
     # present entry, missing entry, remote unchecked
     assert "imagenet10        val    jpeg    ✓" in out
@@ -420,3 +420,18 @@ def test_no_color_flag_and_piped_output_plain(env, capsys):
     assert "\033[" not in capsys.readouterr().out
     cli.main(["--color", "always", "path", "in10", "val"])
     assert "\033[32m✓\033[0m imagenet10 val jpeg" in capsys.readouterr().out
+
+
+def test_platform_dirs_are_unexpanded_and_listed_one_per_line(env, capsys, monkeypatch):
+    from visionlab.datasets.runtime_platform import PLATFORM_CACHE_DIRS, Platform, get_platform_cache_dir
+
+    assert PLATFORM_CACHE_DIRS[Platform.CPU_WORKSTATION] == "~/.slipstream"
+    with monkeypatch.context() as m:
+        m.delenv("SLIPSTREAM_CACHE_DIR")
+        assert get_platform_cache_dir(Platform.CPU_WORKSTATION) == str(Path.home() / ".slipstream")
+    cli.main(["status", "--no-remote"])
+    out = capsys.readouterr().out
+    assert "  platforms   (default cache dir per platform; ~ is that machine's home)" in out
+    assert "    fas_cluster       /n/netscratch/alvarez_lab/Lab/datasets/slipstream" in out
+    assert "    gpu_devbox        ~/.slipstream" in out
+    assert "<- this machine" not in out  # env var set in fixture, so no platform default is in use
