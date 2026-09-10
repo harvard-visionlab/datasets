@@ -1,11 +1,18 @@
-"""Tests for the ``visionlab-datasets`` CLI (offline; slipstream.cli is patched)."""
+"""Tests for the ``visionlab-datasets`` CLI.
+
+Offline: S3 and download calls are patched; the cache dir is a tmp_path with
+fake caches (manifest + integrity patched) so local checks run for real.
+"""
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 import visionlab.datasets.cli as cli
+
+MANIFEST = "manifest.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -40,8 +47,8 @@ def test_resolve_name_unknown_lists_options():
 def test_all_aliases_point_at_registered_datasets():
     from visionlab.datasets import list_datasets
 
-    known = set(list_datasets())
-    assert set(cli.ALIASES.values()) <= known
+    assert set(cli.ALIASES.values()) <= set(list_datasets())
+    assert set(cli.PRIMARY_ALIASES) <= set(cli.ALIASES)
 
 
 @pytest.mark.parametrize(
@@ -64,134 +71,176 @@ def test_parse_list_rejects_unknown():
         cli.parse_list("test", cli.SPLITS, ["val"])
 
 
+def test_cache_name_matches_registry_load_rule():
+    from visionlab.datasets import get_config
+
+    remote = get_config("imagenet100_s292").remote_cache[("val", "jpeg")]
+    assert cli.cache_name_for(remote) == "imagenet100-s292_l584-jpeg-val"
+    assert cli.cache_name_for(remote + "/") == "imagenet100-s292_l584-jpeg-val"
+
+
+def test_fmt_bytes():
+    assert cli.fmt_bytes(None) == "?"
+    assert cli.fmt_bytes(512) == "512 B"
+    assert cli.fmt_bytes(34_900_000) == "33.3 MB"
+
+
 # --------------------------------------------------------------------------- #
-# commands (slipstream.cli patched)
+# fixtures: fake cache dir + patched slipstream plumbing
 # --------------------------------------------------------------------------- #
 
 
-class FakeSlipCli:
-    OK, BAD, WARN = "✓", "✗", "⚠"
-    MANIFEST_FILE = "manifest.json"
+@dataclass
+class FakeS3Info:
+    s5cmd_path: str | None = "/usr/bin/s5cmd"
+    s5cmd_version: str | None = "v2"
+    s5cmd_error: str | None = None
+    credentials_found: bool = True
+    credentials_method: str | None = "env"
+    profile: str | None = None
+    region: str | None = "us-east-1"
+    identity_arn: str | None = "arn:aws:iam::****:user/test"
+    identity_error: str | None = None
+    bucket_url: str | None = None
+    bucket_readable: bool | None = True
+    bucket_error: str | None = None
+    checked: bool = True
 
-    def __init__(self, cache_dir: Path):
-        self.cache_dir = cache_dir
-        self.sync_calls: list[argparse.Namespace] = []
-        self.printed = None
 
-    def _import_registry(self):
-        import visionlab.datasets as vd
+class FakePlumbing:
+    """Stands in for slipstream.cli; inspect_dir/find_other_caches are the real ones."""
 
-        return vd
+    def __init__(self):
+        import slipstream.cli as real
 
-    def _configure_color(self, no_color=False):
-        pass
+        self.inspect_dir = real.inspect_dir
+        self.find_other_caches = real.find_other_caches
+        self.remote_sizes: dict[str, tuple[int, int]] = {}
+        self.remote_error: Exception | None = None
+        self.s3 = FakeS3Info()
+        self.listed: list[str] = []
 
-    def resolve_cache_dir(self, vd):
-        return argparse.Namespace(path=str(self.cache_dir))
+    def check_s3(self, remote_base, *, check_remote=True, endpoint_url=None):
+        self.s3.bucket_url = remote_base
+        self.s3.checked = check_remote
+        return self.s3
 
-    def cmd_sync(self, ns):
-        self.sync_calls.append(ns)
-        return 0
+    def remote_listing(self, remote, *, endpoint_url=None, profile=None):
+        self.listed.append(remote)
+        if self.remote_error is not None:
+            raise self.remote_error
+        return self.remote_sizes.get(remote, (14, 889_000_000))
 
-    def collect_status(self, check_remote_access=True, endpoint_url=None):
-        return {
-            "visionlab_datasets_version": "x",
-            "cache": {"path": str(self.cache_dir), "access": {}},
-            "datasets": [
-                {
-                    "dataset": "imagenet10",
-                    "split": "val",
-                    "fmt": "jpeg",
-                    "local_status": "ok",
-                    "local_path": str(self.cache_dir / "imagenet10-s256_l512-jpeg-val"),
-                },
-                {
-                    "dataset": "imagenet10",
-                    "split": "train",
-                    "fmt": "jpeg",
-                    "local_status": "missing",
-                    "local_path": str(self.cache_dir / "imagenet10-s256_l512-jpeg-train"),
-                },
-            ],
-        }
 
-    def print_status(self, status):
-        self.printed = status
-        print("STATUS TABLE")
-
-    def _problems(self, status):
-        return []
+def make_cache(root: Path, cache_name: str, num_samples: int = 5000, nbytes: int = 1000) -> Path:
+    d = root / cache_name
+    d.mkdir(parents=True)
+    (d / MANIFEST).write_text(json.dumps({"num_samples": num_samples}))
+    (d / "data.bin").write_bytes(b"x" * nbytes)
+    return d
 
 
 @pytest.fixture
-def fake(monkeypatch, tmp_path):
-    f = FakeSlipCli(tmp_path)
-    monkeypatch.setattr(cli, "_slipstream_cli", lambda: f)
-    return f
+def env(monkeypatch, tmp_path):
+    """Cache dir -> tmp_path; slipstream plumbing faked; integrity always ok."""
+    from slipstream.cache import OptimizedCache
+
+    monkeypatch.setenv("SLIPSTREAM_CACHE_DIR", str(tmp_path))
+    plumbing = FakePlumbing()
+    monkeypatch.setattr(cli, "_slipstream_cli", lambda: plumbing)
+    monkeypatch.setattr(OptimizedCache, "check_integrity", staticmethod(lambda p: (True, [])))
+    downloads: list[tuple[str, Path]] = []
+
+    def fake_download(remote, local, endpoint_url=None, numworkers=32, verbose=True):
+        downloads.append((remote, Path(local)))
+        make_cache(Path(local).parent, Path(local).name, num_samples=99)
+        return True
+
+    import slipstream.s3_sync
+
+    monkeypatch.setattr(slipstream.s3_sync, "download_s3_cache", fake_download)
+    plumbing.downloads = downloads
+    plumbing.root = tmp_path
+    return plumbing
 
 
-def test_sync_expands_alias_splits_and_fmts(fake):
-    rc = cli.main(["sync", "in100", "train,val", "--fmt", "all", "--dry-run", "--numworkers", "4"])
-    assert rc == 0
-    calls = [(ns.targets, ns.split, ns.fmt) for ns in fake.sync_calls]
-    assert calls == [
-        (["imagenet100"], "train", "jpeg"),
-        (["imagenet100"], "train", "yuv420"),
-        (["imagenet100"], "val", "jpeg"),
-        (["imagenet100"], "val", "yuv420"),
-    ]
-    assert all(ns.dry_run and ns.numworkers == 4 and ns.dest is None for ns in fake.sync_calls)
+# --------------------------------------------------------------------------- #
+# status
+# --------------------------------------------------------------------------- #
 
 
-def test_sync_defaults_to_val_jpeg(fake):
-    assert cli.main(["sync", "in10"]) == 0
-    assert [(ns.split, ns.fmt) for ns in fake.sync_calls] == [("val", "jpeg")]
-
-
-def test_sync_unknown_dataset(fake):
-    with pytest.raises(SystemExit):
-        cli.main(["sync", "cifar"])
-    assert fake.sync_calls == []
-
-
-def test_sync_dataset_without_caches(fake):
-    with pytest.raises(SystemExit) as ei:
-        cli.main(["sync", "imagenette", "val"])
-    assert "no cache" in str(ei.value)
-
-
-def test_path_prints_local_paths(fake, capsys, tmp_path):
-    (tmp_path / "imagenet10-s256_l512-jpeg-val").mkdir()
-    (tmp_path / "imagenet10-s256_l512-jpeg-val" / "manifest.json").write_text("{}")
-    assert cli.main(["path", "in10", "all"]) == 0
-    out = capsys.readouterr().out.splitlines()
-    assert out == [
-        f"✗ imagenet10 train jpeg  {tmp_path / 'imagenet10-s256_l512-jpeg-train'}",
-        f"✓ imagenet10 val jpeg  {tmp_path / 'imagenet10-s256_l512-jpeg-val'}",
-    ]
-
-
-def test_path_quiet_and_dest(fake, capsys):
-    assert cli.main(["path", "in1k", "val", "--fmt", "yuv420", "-q", "--dest", "/x"]) == 0
-    assert capsys.readouterr().out.strip() == "/x/imagenet1k-s256_l512-yuv420-val"
-
-
-def test_status_text_with_paths(fake, capsys):
-    assert cli.main(["status", "--paths", "--no-remote"]) == 0
+def test_status_table_and_paths(env, capsys):
+    make_cache(env.root, "imagenet10-s256_l512-jpeg-val", num_samples=5000)
+    make_cache(env.root, "slipcache-deadbeef")  # not in registry
+    rc = cli.main(["status", "--paths", "--no-remote"])
     out = capsys.readouterr().out
-    assert "STATUS TABLE" in out
+    assert rc == 0, out
+    assert f"path        {env.root}" in out
+    assert "source      SLIPSTREAM_CACHE_DIR environment variable" in out
+    assert "platforms   fas_cluster=" in out
+    assert "identity    -  (remote checks skipped)" in out
+    # present entry, missing entry, remote unchecked
+    assert "imagenet10        val    jpeg    ✓" in out
+    assert "imagenet10        train  jpeg    ✗ missing" in out
+    assert "to fetch:   visionlab-datasets sync in10 val --fmt yuv420" in out  # first missing entry
+    assert "registered but no remote caches yet: imagenette" in out
     assert "Local cache paths" in out
-    assert "imagenet10-s256_l512-jpeg-val" in out
-    assert "imagenet10-s256_l512-jpeg-train" not in out  # missing entries not listed
-    assert "in100=imagenet100" in out
-    assert fake.printed["visionlab_datasets_version"] == cli.__version__
+    assert str(env.root / "imagenet10-s256_l512-jpeg-val") in out
+    assert str(env.root / "imagenet10-s256_l512-jpeg-train") not in out
+    assert "Other slipstream caches in cache dir" in out and "slipcache-deadbeef" in out
+    assert "aliases: in10=imagenet10, in100=imagenet100" in out
+    assert "✓ Everything looks good." in out
 
 
-def test_status_json(fake, capsys):
-    assert cli.main(["status", "--json"]) == 0
+def test_status_sample_count_mismatch_warns(env, capsys):
+    make_cache(env.root, "imagenet100-s292_l584-jpeg-val", num_samples=4999)
+    cli.main(["status", "--no-remote"])
+    out = capsys.readouterr().out
+    assert "⚠ imagenet100-s292_l584-jpeg-val: sample count 4,999 != registry num_val 5,000" in out
+
+
+def test_status_remote_checks(env, capsys):
+    env.remote_sizes = {}
+    rc = cli.main(["status"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "identity    ✓  arn:aws:iam::****:user/test" in out
+    assert "read        ✓  s3://visionlab-datasets/slipstream-cache/" in out
+    assert "✓  847.8 MB" in out  # 889_000_000 bytes
+    assert len(env.listed) == 16  # every registered (split, fmt)
+
+
+def test_status_no_credentials_is_a_problem(env, capsys):
+    env.s3 = FakeS3Info(credentials_found=False, identity_arn=None, bucket_readable=False, bucket_error="no credentials")
+    rc = cli.main(["status"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Problems" in out and "No AWS credentials found" in out
+    assert env.listed == []  # no remote listing without creds
+
+
+def test_status_json(env, capsys):
+    rc = cli.main(["status", "--json", "--no-remote"])
     data = json.loads(capsys.readouterr().out)
-    assert data["aliases"]["in1k"] == "imagenet1k"
+    assert rc == 0
     assert data["visionlab_datasets_version"] == cli.__version__
+    assert data["cache"]["path"] == str(env.root)
+    assert data["aliases"] == {"in10": "imagenet10", "in100": "imagenet100", "in1k": "imagenet1k", "in100_s292": "imagenet100_s292"}
+    assert {d["dataset"] for d in data["datasets"]} == {"imagenet10", "imagenet100", "imagenet100_s292", "imagenet1k"}
+    assert data["datasets_without_caches"] == ["imagenette"]
+
+
+def test_status_missing_cache_dir_is_soft(env, capsys, monkeypatch):
+    monkeypatch.setenv("SLIPSTREAM_CACHE_DIR", str(env.root / "not-yet"))
+    rc = cli.main(["status", "--no-remote"])
+    out = capsys.readouterr().out
+    assert rc == 0  # creatable -> not a hard failure
+    assert "does not exist yet (will be created on first sync)" in out
+
+
+# --------------------------------------------------------------------------- #
+# list / path
+# --------------------------------------------------------------------------- #
 
 
 def test_list_text(capsys):
@@ -201,6 +250,112 @@ def test_list_text(capsys):
     assert "imagenette  (10 classes)" in out
     assert "(no remote caches registered)" in out
     assert "s3://visionlab-datasets/slipstream-cache/imagenet100/imagenet100-s292_l584-jpeg-val" in out
+
+
+def test_path_prints_local_paths(env, capsys):
+    make_cache(env.root, "imagenet10-s256_l512-jpeg-val")
+    assert cli.main(["path", "in10", "all"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out == [  # SPLITS order: train, val
+        f"✗ imagenet10 train jpeg  {env.root / 'imagenet10-s256_l512-jpeg-train'}",
+        f"✓ imagenet10 val jpeg  {env.root / 'imagenet10-s256_l512-jpeg-val'}",
+    ]
+
+
+def test_path_quiet_and_dest(env, capsys):
+    assert cli.main(["path", "in1k", "val", "--fmt", "yuv420", "-q", "--dest", "/x"]) == 0
+    assert capsys.readouterr().out.strip() == "/x/imagenet1k-s256_l512-yuv420-val"
+
+
+def test_path_no_such_combo(env):
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["path", "imagenette", "val"])
+    assert "no cache" in str(ei.value)
+
+
+# --------------------------------------------------------------------------- #
+# sync
+# --------------------------------------------------------------------------- #
+
+
+def test_sync_dry_run_expands_splits_and_fmts(env, capsys):
+    make_cache(env.root, "imagenet100-s256_l512-jpeg-val")
+    rc = cli.main(["sync", "in100", "train,val", "--fmt", "all", "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "✓ imagenet100-s256_l512-jpeg-val: already present" in out
+    assert sorted(env.listed) == [
+        "s3://visionlab-datasets/slipstream-cache/imagenet100/imagenet100-s256_l512-jpeg-train/",
+        "s3://visionlab-datasets/slipstream-cache/imagenet100/imagenet100-s256_l512-yuv420-train/",
+        "s3://visionlab-datasets/slipstream-cache/imagenet100/imagenet100-s256_l512-yuv420-val/",
+    ]
+    assert "[dry-run] nothing downloaded" in out
+    assert env.downloads == []
+
+
+def test_sync_downloads_and_verifies(env, capsys):
+    rc = cli.main(["sync", "in10", "val"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert env.downloads == [
+        (
+            "s3://visionlab-datasets/slipstream-cache/imagenet10/imagenet10-s256_l512-jpeg-val/",
+            env.root / "imagenet10-s256_l512-jpeg-val",
+        )
+    ]
+    assert f"✓ imagenet10-s256_l512-jpeg-val -> {env.root / 'imagenet10-s256_l512-jpeg-val'}" in out
+
+
+def test_sync_defaults_to_val_jpeg(env):
+    cli.main(["sync", "in10"])
+    assert [p.name for _, p in env.downloads] == ["imagenet10-s256_l512-jpeg-val"]
+
+
+def test_sync_skips_unregistered_combo_with_warning(env, capsys):
+    from visionlab.datasets import get_config, register
+    from visionlab.datasets.registry import DatasetConfig, REGISTRY
+
+    cfg = get_config("imagenet10")
+    partial = DatasetConfig(
+        name="partial10",
+        num_classes=10,
+        remote_cache={("val", "jpeg"): cfg.remote_cache[("val", "jpeg")]},
+        metadata={},
+    )
+    register(partial)
+    try:
+        rc = cli.main(["sync", "partial10", "train,val", "--dry-run"])
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert "⚠ partial10: no train/jpeg cache registered, skipping" in out
+    finally:
+        REGISTRY.pop("partial10", None)
+
+
+def test_sync_remote_denied(env, capsys):
+    env.remote_error = Exception("AccessDenied: nope")
+    rc = cli.main(["sync", "in10", "val"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "✗ imagenet10-s256_l512-jpeg-val: remote denied" in out
+    assert env.downloads == []
+
+
+def test_sync_unknown_dataset(env):
+    with pytest.raises(SystemExit):
+        cli.main(["sync", "cifar"])
+    assert env.downloads == []
+
+
+def test_sync_dataset_without_caches(env):
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["sync", "imagenette", "val"])
+    assert "no cache" in str(ei.value)
+
+
+# --------------------------------------------------------------------------- #
+# slipstream missing
+# --------------------------------------------------------------------------- #
 
 
 def test_missing_slipstream_cli_message(monkeypatch):
@@ -217,3 +372,8 @@ def test_missing_slipstream_cli_message(monkeypatch):
     with pytest.raises(SystemExit) as ei:
         cli._slipstream_cli()
     assert "uv lock --upgrade-package visionlab-slipstream" in str(ei.value)
+
+
+def test_main_dispatch_returns_int(env):
+    ns = argparse.Namespace(json=True)
+    assert cli.cmd_list(ns) == 0

@@ -42,9 +42,14 @@ uv run visionlab-datasets sync in1k val --fmt all --dry-run
 ```
 
 Dataset aliases: `in10`, `in100`, `in1k`, `in100_s292` (full registry names work too).
-Splits/formats are comma lists or `all`. Also available as `python -m visionlab.datasets`
-and, with the same checks but without aliases, as `slipstream status` / `slipstream sync`
-from the `visionlab-slipstream` package.
+Splits/formats are comma lists or `all`. Also available as `python -m visionlab.datasets`.
+
+This CLI is the one lab members should use: visionlab-datasets owns the registry of
+lab-supported datasets (names, splits, formats, S3 cache locations, per-platform cache
+dir). `slipstream status` from the `visionlab-slipstream` package is only a low-level
+plumbing check (cache dir, s5cmd, AWS credentials) and knows nothing about lab datasets.
+Adding a dataset means adding a config under `datasets/_configs/`; it then appears in
+`status`, `list`, `path`, and `sync` automatically.
 
 Cache directory resolution: `SLIPSTREAM_CACHE_DIR` if set, else a per-platform default
 (`/n/netscratch/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster, `~/.slipstream`

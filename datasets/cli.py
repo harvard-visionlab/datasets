@@ -4,6 +4,7 @@
 
     visionlab-datasets status                  # cache dir, permissions, S3 access, per-dataset table
     visionlab-datasets status --paths          # ... plus the full local path of every present cache
+    visionlab-datasets status --no-remote      # offline: skip S3 checks
     visionlab-datasets list                    # registered datasets and their S3 caches
     visionlab-datasets path in100 val          # print local cache path(s) for a dataset
     visionlab-datasets sync in100 train,val    # download caches (default fmt: jpeg)
@@ -15,19 +16,35 @@ Dataset names accept short aliases (``in10``, ``in100``, ``in1k``, ``in100_s292`
 as well as the full registry names. Splits are a comma-separated list
 (``train,val``) or ``all``; ``--fmt`` likewise (``jpeg,yuv420`` or ``all``).
 
-The heavy lifting (cache-dir resolution, integrity checks, S3 listing, s5cmd
-download) lives in ``slipstream.cli`` (visionlab-slipstream >= 0.4.5); this
-module is a thin, registry-aware front end so lab members have one command
-scoped to *our* datasets.
+Division of labour: **visionlab-datasets** owns the lab dataset registry
+(names, splits, formats, remote S3 caches, per-platform cache dir) and hence
+this CLI. **slipstream** is the registry-agnostic plumbing; we only use its
+generic building blocks (``slipstream.cli.inspect_dir/check_s3/remote_listing/
+find_other_caches``, ``slipstream.cache.OptimizedCache.check_integrity``,
+``slipstream.s3_sync.download_s3_cache``). ``slipstream status`` remains as a
+bare plumbing check that knows nothing about lab datasets.
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import os
+import platform as _platform
+import socket
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .registry import get_config, list_datasets
+from .runtime_platform import (
+    CACHE_DIR_ENV_VAR,
+    PLATFORM_CACHE_DIRS,
+    detect_platform,
+    get_platform_cache_dir,
+)
 from .version import __version__
 
 MIN_SLIPSTREAM = "0.4.5"
@@ -49,9 +66,11 @@ PRIMARY_ALIASES = ("in10", "in100", "in1k", "in100_s292")
 SPLITS = ("train", "val")
 FMTS = ("jpeg", "yuv420")
 
+OK, BAD, WARN, SKIP = "✓", "✗", "⚠", "-"
+
 
 # --------------------------------------------------------------------------- #
-# helpers
+# slipstream plumbing (generic, registry-agnostic)
 # --------------------------------------------------------------------------- #
 
 
@@ -73,10 +92,31 @@ def _slipstream_cli():
     return scli
 
 
-def _pub(scli, name: str):
-    """Prefer slipstream.cli's public name, fall back to the underscore one (< 0.4.6)."""
-    fn = getattr(scli, name, None) or getattr(scli, "_" + name)
-    return fn
+def fmt_bytes(n: int | None) -> str:
+    if n is None:
+        return "?"
+    x = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if x < 1024 or unit == "TB":
+            return f"{x:.0f} {unit}" if unit == "B" else f"{x:.1f} {unit}"
+        x /= 1024
+    return f"{x:.1f} TB"  # pragma: no cover
+
+
+def _dir_bytes(path: Path) -> int:
+    total = 0
+    for p in path.rglob("*"):
+        if p.is_file():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+# --------------------------------------------------------------------------- #
+# name / list parsing
+# --------------------------------------------------------------------------- #
 
 
 def resolve_name(name: str) -> str:
@@ -96,7 +136,7 @@ def resolve_name(name: str) -> str:
 
 
 def parse_list(value: str | None, choices: tuple[str, ...], default: list[str]) -> list[str]:
-    """``'train,val'`` -> ``['train', 'val']``; ``'all'``/None -> default; validates."""
+    """``'train,val'`` -> ``['train', 'val']``; ``'all'`` -> all choices; None -> default."""
     if value is None:
         return list(default)
     v = value.strip().lower()
@@ -114,48 +154,402 @@ def parse_list(value: str | None, choices: tuple[str, ...], default: list[str]) 
     return out
 
 
-def _available(name: str) -> list[tuple[str, str]]:
-    return list(get_config(name).remote_cache.keys())
-
-
-def _local_path(scli, cache_base: Path, remote: str) -> Path:
-    cache_name = remote.rstrip("/").rsplit("/", 1)[-1]
-    return cache_base / cache_name
+def _primary_alias(name: str) -> str:
+    for a in PRIMARY_ALIASES:
+        if ALIASES.get(a) == name:
+            return a
+    return name
 
 
 # --------------------------------------------------------------------------- #
-# commands
+# data model
 # --------------------------------------------------------------------------- #
+
+
+@dataclass
+class CacheDirInfo:
+    path: str
+    source: str
+    env_var: str | None
+    platform: str | None
+    platform_dirs: dict[str, str]
+    access: dict[str, Any]  # asdict(slipstream DirAccess)
+
+
+def resolve_cache_dir(dest: str | None = None) -> CacheDirInfo:
+    """Cache dir the way ``visionlab.datasets.load`` resolves it (env var, else platform)."""
+    scli = _slipstream_cli()
+    env_val = os.environ.get(CACHE_DIR_ENV_VAR)
+    plat = None
+    try:
+        plat = detect_platform()
+        plat_name = getattr(plat, "value", str(plat))
+    except Exception as exc:  # pragma: no cover - defensive
+        plat_name = f"unknown ({exc})"
+    if dest:
+        path, source = Path(dest).expanduser(), "--dest"
+    elif env_val:
+        path, source = Path(env_val).expanduser(), f"{CACHE_DIR_ENV_VAR} environment variable"
+    else:
+        path = Path(get_platform_cache_dir(plat)).expanduser()
+        source = f"visionlab-datasets platform default ({plat_name})"
+    return CacheDirInfo(
+        path=str(path),
+        source=source,
+        env_var=env_val,
+        platform=plat_name,
+        platform_dirs={getattr(k, "value", str(k)): str(v) for k, v in PLATFORM_CACHE_DIRS.items()},
+        access=asdict(scli.inspect_dir(path)),
+    )
+
+
+@dataclass
+class DatasetEntry:
+    dataset: str
+    split: str
+    fmt: str
+    cache_name: str
+    remote: str
+    local_path: str
+    expected_samples: int | None = None  # registry metadata num_{split}
+    local_status: str = "missing"  # ok | incomplete | missing | unreadable
+    local_problems: list[str] = field(default_factory=list)
+    local_bytes: int | None = None
+    num_samples: int | None = None
+    remote_status: str = "unchecked"  # ok | missing | denied | error | unchecked
+    remote_files: int | None = None
+    remote_bytes: int | None = None
+    remote_error: str | None = None
+
+
+def cache_name_for(remote: str) -> str:
+    """Local dir name for a remote cache (same rule as ``registry.load``)."""
+    return remote.rstrip("/").rsplit("/", 1)[-1]
+
+
+def registry_entries(cache_base: Path, names: list[str] | None = None) -> list[DatasetEntry]:
+    out: list[DatasetEntry] = []
+    for name in names or list_datasets():
+        cfg = get_config(name)
+        meta = cfg.metadata or {}
+        for (split, fmt), remote in cfg.remote_cache.items():
+            expected = meta.get(f"num_{split}")
+            cache_name = cache_name_for(remote)
+            out.append(
+                DatasetEntry(
+                    dataset=name,
+                    split=split,
+                    fmt=fmt,
+                    cache_name=cache_name,
+                    remote=remote.rstrip("/") + "/",
+                    local_path=str(cache_base / cache_name),
+                    expected_samples=int(expected) if isinstance(expected, int) else None,
+                )
+            )
+    return out
+
+
+def datasets_without_caches() -> list[str]:
+    return [n for n in list_datasets() if not get_config(n).remote_cache]
+
+
+def check_local(entry: DatasetEntry) -> None:
+    from slipstream.cache import MANIFEST_FILE, OptimizedCache  # type: ignore
+
+    path = Path(entry.local_path)
+    manifest = path / MANIFEST_FILE
+    entry.local_problems = []
+    if not manifest.exists():
+        entry.local_status = "missing"
+        return
+    if not os.access(manifest, os.R_OK) or not os.access(path, os.R_OK | os.X_OK):
+        entry.local_status = "unreadable"
+        entry.local_problems = ["no read permission"]
+        return
+    ok, problems = OptimizedCache.check_integrity(path)
+    entry.local_status = "ok" if ok else "incomplete"
+    entry.local_problems = list(problems)
+    try:
+        with open(manifest) as f:
+            entry.num_samples = int(json.load(f).get("num_samples"))
+    except Exception:
+        entry.num_samples = None
+    if (
+        entry.expected_samples is not None
+        and entry.num_samples is not None
+        and entry.num_samples != entry.expected_samples
+    ):
+        entry.local_problems.append(
+            f"sample count {entry.num_samples:,} != registry num_{entry.split} {entry.expected_samples:,}"
+        )
+    try:
+        entry.local_bytes = _dir_bytes(path)
+    except OSError:
+        pass
+    if ok:
+        for p in path.iterdir():
+            if p.is_file() and not os.access(p, os.R_OK):
+                entry.local_status = "unreadable"
+                entry.local_problems = [f"no read permission: {p.name}"]
+                break
+
+
+def check_remote(entry: DatasetEntry, *, endpoint_url: str | None, profile: str | None) -> None:
+    scli = _slipstream_cli()
+    try:
+        n, total = scli.remote_listing(entry.remote, endpoint_url=endpoint_url, profile=profile)
+    except Exception as exc:
+        msg = str(exc)
+        entry.remote_status = "denied" if "AccessDenied" in msg or "Forbidden" in msg else "error"
+        entry.remote_error = f"{type(exc).__name__}: {msg}"
+        return
+    entry.remote_files, entry.remote_bytes = n, total
+    entry.remote_status = "ok" if n > 0 else "missing"
+
+
+def _remote_base(entries: list[DatasetEntry]) -> str:
+    """Common S3 base (bucket + first key component) of the registry caches."""
+    if not entries:
+        return "s3://visionlab-datasets/slipstream-cache/"
+    rest = entries[0].remote[len("s3://") :]
+    bucket, _, key = rest.partition("/")
+    return f"s3://{bucket}/{key.split('/', 1)[0]}/"
+
+
+# --------------------------------------------------------------------------- #
+# status
+# --------------------------------------------------------------------------- #
+
+
+def collect_status(*, check_remote_access: bool = True, endpoint_url: str | None = None) -> dict:
+    scli = _slipstream_cli()
+    import slipstream  # type: ignore
+
+    cache = resolve_cache_dir()
+    cache_base = Path(cache.path)
+    entries = registry_entries(cache_base)
+
+    s3 = scli.check_s3(_remote_base(entries), check_remote=check_remote_access, endpoint_url=endpoint_url)
+
+    for e in entries:
+        check_local(e)
+    if check_remote_access and s3.credentials_found and entries:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(
+                pool.map(
+                    lambda e: check_remote(e, endpoint_url=endpoint_url, profile=s3.profile),
+                    entries,
+                )
+            )
+
+    others = scli.find_other_caches(cache_base, {e.cache_name for e in entries})
+    return {
+        "visionlab_datasets_version": __version__,
+        "slipstream_version": getattr(slipstream, "__version__", "?"),
+        "python": _platform.python_version(),
+        "host": socket.gethostname(),
+        "user": getpass.getuser(),
+        "cache": asdict(cache),
+        "s3": asdict(s3),
+        "datasets": [asdict(e) for e in entries],
+        "datasets_without_caches": datasets_without_caches(),
+        "other_caches": [{"name": n, "bytes": b} for n, b in others],
+        "aliases": {a: ALIASES[a] for a in PRIMARY_ALIASES if ALIASES[a] in set(list_datasets())},
+    }
+
+
+def problems(status: dict) -> list[str]:
+    """Human-readable list of things that will block loading/training."""
+    out: list[str] = []
+    acc = status["cache"]["access"]
+    cache_path = status["cache"]["path"]
+    if acc.get("error"):
+        out.append(f"Cannot inspect cache dir {cache_path}: {acc['error']}")
+    elif not acc["exists"]:
+        if acc["can_create"]:
+            out.append(f"Cache dir {cache_path} does not exist yet (will be created on first sync).")
+        else:
+            out.append(
+                f"Cache dir {cache_path} does not exist and cannot be created (parent not writable)."
+            )
+    else:
+        if not acc["readable"] or not acc["traversable"]:
+            out.append(
+                f"No read access to cache dir {cache_path} (owner {acc['owner']}, mode {acc['mode']})."
+            )
+        if not acc["writable"]:
+            out.append(
+                f"No write access to cache dir {cache_path}; existing caches usable, cannot sync new ones."
+            )
+    s3 = status["s3"]
+    if s3["s5cmd_error"]:
+        out.append(f"s5cmd not usable: {s3['s5cmd_error']}  (fix: uv tool install s5cmd)")
+    if not s3["credentials_found"]:
+        out.append(
+            "No AWS credentials found (set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or configure ~/.aws/credentials)."
+        )
+    elif s3["checked"] and s3["bucket_readable"] is False:
+        out.append(f"Cannot list {s3['bucket_url']}: {s3['bucket_error']}")
+    unreadable = [e for e in status["datasets"] if e["local_status"] == "unreadable"]
+    for e in unreadable[:3]:
+        out.append(f"Cache {e['cache_name']} present but not readable: {'; '.join(e['local_problems'])}")
+    return out
+
+
+def hard_problems(status: dict) -> list[str]:
+    return [m for m in problems(status) if "will be created" not in m]
+
+
+def _mark(ok: bool | None) -> str:
+    return SKIP if ok is None else (OK if ok else BAD)
+
+
+def print_status(status: dict, *, paths: bool = False) -> None:
+    p = print
+    c = status["cache"]
+    a = c["access"]
+    s3 = status["s3"]
+
+    p(
+        f"visionlab-datasets {status['visionlab_datasets_version']}"
+        f"  ·  slipstream {status['slipstream_version']}"
+        f"  ·  python {status['python']}"
+    )
+    p(f"{status['user']}@{status['host']}  ·  platform {c['platform']}")
+    p()
+
+    p("Cache directory")
+    p(f"  path        {c['path']}" + (f"  -> {a['resolved']}" if a.get("is_symlink") else ""))
+    p(f"  source      {c['source']}")
+    p(f"  {CACHE_DIR_ENV_VAR}  {c['env_var'] or '(not set)'}")
+    if c.get("platform_dirs"):
+        p("  platforms   " + ", ".join(f"{k}={v}" for k, v in c["platform_dirs"].items()))
+    if a.get("error"):
+        p(f"  exists      {BAD}  {a['error']}")
+    elif a["exists"]:
+        p(f"  exists      {OK}  owner {a['owner']}:{a['group']}  mode {a['mode']}")
+        p(f"  read        {_mark(a['readable'] and a['traversable'])}")
+        p(f"  write       {_mark(a['writable'])}")
+    else:
+        p(f"  exists      {BAD}  (not created yet; can create: {_mark(a['can_create'])})")
+    if a.get("free_bytes") is not None:
+        p(f"  disk free   {fmt_bytes(a['free_bytes'])} of {fmt_bytes(a['total_bytes'])}")
+    p()
+
+    p("S3 access")
+    if s3["s5cmd_path"]:
+        p(f"  s5cmd       {OK}  {s3['s5cmd_path']} ({s3['s5cmd_version']})")
+    else:
+        p(f"  s5cmd       {BAD}  {s3['s5cmd_error']}")
+    if s3["credentials_found"]:
+        extra = f" via {s3['credentials_method']}" if s3["credentials_method"] else ""
+        extra += f", profile {s3['profile']}" if s3["profile"] else ""
+        extra += f", region {s3['region']}" if s3["region"] else ""
+        p(f"  credentials {OK} {extra.strip()}")
+    else:
+        p(f"  credentials {BAD}  none found")
+    if not s3["checked"]:
+        p(f"  identity    {SKIP}  (remote checks skipped)")
+    elif s3["identity_arn"]:
+        p(f"  identity    {OK}  {s3['identity_arn']}")
+    elif s3["identity_error"]:
+        p(f"  identity    {BAD}  {s3['identity_error']}")
+    if s3["checked"]:
+        if s3["bucket_readable"]:
+            p(f"  read        {OK}  {s3['bucket_url']}")
+        elif s3["bucket_readable"] is False:
+            p(f"  read        {BAD}  {s3['bucket_url']}: {s3['bucket_error']}")
+    p()
+
+    entries = status["datasets"]
+    if entries:
+        p("Lab datasets  (local = in cache dir, remote = readable on S3)")
+        w_ds = max(len("dataset"), *(len(e["dataset"]) for e in entries)) + 2
+        w_split = max(len("split"), *(len(e["split"]) for e in entries)) + 2
+        w_fmt = max(len("fmt"), *(len(e["fmt"]) for e in entries)) + 2
+        p(f"  {'dataset':<{w_ds}}{'split':<{w_split}}{'fmt':<{w_fmt}}{'local':<22}{'remote':<14}cache name")
+        for e in entries:
+            ls = e["local_status"]
+            if ls == "ok":
+                local = f"{OK} {fmt_bytes(e['local_bytes']):>9}"
+            elif ls == "incomplete":
+                local = f"{WARN} incomplete"
+            elif ls == "unreadable":
+                local = f"{BAD} unreadable"
+            else:
+                local = f"{BAD} missing"
+            rs = e["remote_status"]
+            if rs == "ok":
+                remote = f"{OK} {fmt_bytes(e['remote_bytes']):>9}"
+            elif rs == "unchecked":
+                remote = SKIP
+            elif rs == "missing":
+                remote = f"{BAD} not found"
+            elif rs == "denied":
+                remote = f"{BAD} denied"
+            else:
+                remote = f"{BAD} error"
+            p(
+                f"  {e['dataset']:<{w_ds}}{e['split']:<{w_split}}{e['fmt']:<{w_fmt}}"
+                f"{local:<22}{remote:<14}{e['cache_name']}"
+            )
+        p(f"  local root: {c['path']}")
+        for e in [e for e in entries if e["local_problems"]]:
+            p(f"  {WARN} {e['cache_name']}: {'; '.join(e['local_problems'][:3])}")
+        errs = [e for e in entries if e["remote_status"] in ("denied", "error")]
+        if errs:
+            p(f"  {WARN} remote error example ({errs[0]['cache_name']}): {errs[0]['remote_error']}")
+        missing = [e for e in entries if e["local_status"] != "ok"]
+        if missing:
+            ex = missing[0]
+            p(
+                f"  to fetch:   visionlab-datasets sync {_primary_alias(ex['dataset'])} {ex['split']}"
+                + (f" --fmt {ex['fmt']}" if ex["fmt"] != "jpeg" else "")
+            )
+        if status.get("datasets_without_caches"):
+            p(f"  registered but no remote caches yet: {', '.join(status['datasets_without_caches'])}")
+        p()
+
+        if paths:
+            p("Local cache paths")
+            present = [e for e in entries if e["local_status"] == "ok"]
+            if not present:
+                p("  (none present)")
+            for e in present:
+                p(f"  {e['dataset']:<{w_ds}}{e['split']:<{w_split}}{e['fmt']:<{w_fmt}}{e['local_path']}")
+            p()
+
+    if status["other_caches"]:
+        p("Other slipstream caches in cache dir")
+        for o in status["other_caches"]:
+            p(f"  {o['name']:<45}{fmt_bytes(o['bytes']):>10}")
+        p()
+
+    if status.get("aliases"):
+        p("  aliases: " + ", ".join(f"{a}={d}" for a, d in status["aliases"].items()))
+        p()
+
+    probs = problems(status)
+    if probs:
+        p("Problems")
+        for msg in probs:
+            p(f"  {BAD} {msg}")
+    else:
+        p(f"{OK} Everything looks good.")
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    scli = _slipstream_cli()
-    status = scli.collect_status(
-        check_remote_access=not args.no_remote, endpoint_url=args.endpoint_url
-    )
-    status["visionlab_datasets_version"] = __version__
-    status["aliases"] = {a: d for a, d in ALIASES.items() if d in set(list_datasets())}
+    status = collect_status(check_remote_access=not args.no_remote, endpoint_url=args.endpoint_url)
     if args.json:
         print(json.dumps(status, indent=2, default=str))
     else:
-        scli.print_status(status)
-        if args.paths:
-            print()
-            print("Local cache paths")
-            present = [e for e in status["datasets"] if e["local_status"] == "ok"]
-            if not present:
-                print("  (none present)")
-            for e in present:
-                print(f"  {e['dataset']:<18}{e['split']:<7}{e['fmt']:<8}{e['local_path']}")
-        print()
-        print(
-            "  aliases: "
-            + ", ".join(f"{a}={ALIASES[a]}" for a in PRIMARY_ALIASES if a in status["aliases"])
-        )
-        print("  fetch:   visionlab-datasets sync in100 train,val [--fmt jpeg|yuv420|all]")
-    probs = _pub(scli, "problems")(status)
-    hard = [m for m in probs if "will be created" not in m and "not installed" not in m]
-    return 1 if hard else 0
+        print_status(status, paths=args.paths)
+    return 1 if hard_problems(status) else 0
+
+
+# --------------------------------------------------------------------------- #
+# list / path
+# --------------------------------------------------------------------------- #
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -185,65 +579,134 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _select(name: str, splits: list[str], fmts: list[str], cache_base: Path, *, default_note: str):
+    entries = registry_entries(cache_base, [name])
+    wanted = [(s, f) for s in splits for f in fmts]
+    avail = {(e.split, e.fmt): e for e in entries}
+    selected = [avail[k] for k in wanted if k in avail]
+    skipped = [k for k in wanted if k not in avail]
+    if not selected:
+        have = ", ".join(f"{s}/{f}" for s, f in avail) or "none"
+        raise SystemExit(
+            f"{name!r} has no cache for splits={splits} fmts={fmts} ({default_note}). Available: {have}"
+        )
+    return selected, skipped
+
+
 def cmd_path(args: argparse.Namespace) -> int:
-    scli = _slipstream_cli()
+    from slipstream.cache import MANIFEST_FILE  # type: ignore
+
     name = resolve_name(args.dataset)
     splits = parse_list(args.splits, SPLITS, list(SPLITS))
     fmts = parse_list(args.fmt, FMTS, ["jpeg"])
-    cache = scli.resolve_cache_dir(_pub(scli, "import_registry")())
-    cache_base = Path(args.dest) if args.dest else Path(cache.path)
-    cfg = get_config(name)
-    found = 0
-    for split in splits:
-        for fmt in fmts:
-            remote = cfg.remote_cache.get((split, fmt))
-            if remote is None:
-                continue
-            found += 1
-            p = _local_path(scli, cache_base, remote)
-            if args.quiet:
-                print(p)
-            else:
-                mark = scli.OK if (p / scli.MANIFEST_FILE).exists() else scli.BAD
-                print(f"{mark} {name} {split} {fmt}  {p}")
-    if not found:
-        avail = ", ".join(f"{s}/{f}" for s, f in _available(name)) or "none"
-        raise SystemExit(f"{name!r} has no cache for splits={splits} fmts={fmts}. Available: {avail}")
+    cache_base = Path(resolve_cache_dir(args.dest).path)
+    selected, _ = _select(name, splits, fmts, cache_base, default_note="default fmt jpeg")
+    for e in selected:
+        p = Path(e.local_path)
+        if args.quiet:
+            print(p)
+        else:
+            mark = OK if (p / MANIFEST_FILE).exists() else BAD
+            print(f"{mark} {e.dataset} {e.split} {e.fmt}  {p}")
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# sync
+# --------------------------------------------------------------------------- #
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
-    scli = _slipstream_cli()
+    _slipstream_cli()  # fail early with the upgrade hint if slipstream is too old
+    from slipstream.s3_sync import download_s3_cache  # type: ignore
+
     name = resolve_name(args.dataset)
     splits = parse_list(args.splits, SPLITS, ["val"])
     fmts = parse_list(args.fmt, FMTS, ["jpeg"])
-    avail = set(_available(name))
-    combos = [(s, f) for s in splits for f in fmts if (s, f) in avail]
-    skipped = [(s, f) for s in splits for f in fmts if (s, f) not in avail]
-    if not combos:
-        raise SystemExit(
-            f"{name!r} has no cache for splits={splits} fmts={fmts}. "
-            f"Available: {', '.join(f'{s}/{f}' for s, f in sorted(avail)) or 'none'}"
-        )
+    cache = resolve_cache_dir(args.dest)
+    cache_base = Path(cache.path)
+    entries, skipped = _select(name, splits, fmts, cache_base, default_note="defaults: val, jpeg")
     for s, f in skipped:
-        print(f"{scli.WARN} {name}: no {s}/{f} cache registered, skipping")
+        print(f"{WARN} {name}: no {s}/{f} cache registered, skipping")
 
-    rc = 0
-    for split, fmt in combos:
-        ns = argparse.Namespace(
-            targets=[name],
-            split=split,
-            fmt=fmt,
-            dest=args.dest,
-            force=args.force,
-            dry_run=args.dry_run,
-            numworkers=args.numworkers,
+    print(f"Cache dir: {cache_base}  ({cache.source})")
+    todo: list[DatasetEntry] = []
+    for e in entries:
+        check_local(e)
+        if e.local_status == "ok" and not args.force:
+            print(
+                f"  {OK} {e.cache_name}: already present ({fmt_bytes(e.local_bytes)}), "
+                "skipping (use --force to re-download)"
+            )
+        else:
+            todo.append(e)
+    if not todo:
+        return 0
+
+    total_needed = 0
+    for e in todo:
+        check_remote(e, endpoint_url=args.endpoint_url, profile=os.environ.get("AWS_PROFILE"))
+        state = {
+            "missing": "not present locally",
+            "incomplete": "incomplete locally",
+            "unreadable": "unreadable locally",
+        }.get(e.local_status, "re-download")
+        if e.remote_status == "ok":
+            print(
+                f"  {e.cache_name}: {state}; remote {e.remote_files} files, "
+                f"{fmt_bytes(e.remote_bytes)}  <- {e.remote}"
+            )
+            total_needed += e.remote_bytes or 0
+        else:
+            print(
+                f"  {BAD} {e.cache_name}: remote {e.remote_status} "
+                f"({e.remote_error or 'no files at ' + e.remote})"
+            )
+    todo = [e for e in todo if e.remote_status == "ok"]
+    if not todo:
+        return 1
+
+    acc = cache.access
+    if acc.get("free_bytes") is not None:
+        print(f"  need ~{fmt_bytes(total_needed)}, free {fmt_bytes(acc['free_bytes'])} at {cache_base}")
+        if acc["free_bytes"] < total_needed:
+            print(f"  {BAD} not enough free disk space")
+            if not args.force:
+                return 1
+    if acc["exists"] and not acc["writable"]:
+        print(f"  {BAD} cache dir {cache_base} is not writable")
+        return 1
+    if not acc["exists"] and not acc["can_create"]:
+        print(f"  {BAD} cache dir {cache_base} cannot be created")
+        return 1
+
+    if args.dry_run:
+        print("[dry-run] nothing downloaded")
+        return 0
+
+    failed = 0
+    for e in todo:
+        print()
+        ok = download_s3_cache(
+            e.remote,
+            Path(e.local_path),
             endpoint_url=args.endpoint_url,
-            no_color=args.no_color,
+            numworkers=args.numworkers,
+            verbose=True,
         )
-        print(f"== {name} {split} {fmt} ==")
-        rc = max(rc, int(scli.cmd_sync(ns) or 0))
-    return rc
+        if ok:
+            check_local(e)
+            ok = e.local_status == "ok"
+            if not ok:
+                print(
+                    f"  {BAD} {e.cache_name}: downloaded but integrity check failed: "
+                    f"{'; '.join(e.local_problems[:3])}"
+                )
+        if ok:
+            print(f"  {OK} {e.cache_name} -> {e.local_path}")
+        else:
+            failed += 1
+    return 1 if failed else 0
 
 
 # --------------------------------------------------------------------------- #
@@ -277,7 +740,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-remote", action="store_true", help="Skip network checks (S3 identity/listing)")
     sp.add_argument("--endpoint-url", default=None, help="S3-compatible endpoint URL")
     sp.add_argument("--json", action="store_true", help="Machine-readable output")
-    sp.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("list", aliases=["datasets"], help="List registered datasets and S3 caches")
@@ -311,18 +773,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true", help="Show what would be downloaded")
     sp.add_argument("--numworkers", type=int, default=32, help="s5cmd parallel workers (default: 32)")
     sp.add_argument("--endpoint-url", default=None, help="S3-compatible endpoint URL")
-    sp.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
     sp.set_defaults(func=cmd_sync)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if getattr(args, "no_color", False) or getattr(args, "func", None) in (cmd_sync, cmd_status):
-        try:
-            _pub(_slipstream_cli(), "configure_color")(getattr(args, "no_color", False))
-        except SystemExit:
-            pass  # cmd_* will re-raise with the upgrade message
     try:
         return int(args.func(args) or 0)
     except KeyboardInterrupt:

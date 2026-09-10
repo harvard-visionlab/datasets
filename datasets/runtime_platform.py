@@ -24,6 +24,7 @@ class Platform(Enum):
 
 # Platform-specific slipstream cache directories.
 # Override with SLIPSTREAM_CACHE_DIR env var.
+CACHE_DIR_ENV_VAR = "SLIPSTREAM_CACHE_DIR"
 PLATFORM_CACHE_DIRS = {
     Platform.FAS_CLUSTER: "/n/netscratch/alvarez_lab/Lab/datasets/slipstream",
     Platform.LIGHTNING_STUDIO: "/tmp/slipstream_cache",
@@ -104,7 +105,7 @@ def get_platform_cache_dir(platform=None):
       1. SLIPSTREAM_CACHE_DIR env var (user override)
       2. Platform-specific default from PLATFORM_CACHE_DIRS
     """
-    override = os.environ.get("SLIPSTREAM_CACHE_DIR")
+    override = os.environ.get(CACHE_DIR_ENV_VAR)
     if override:
         return override
     if platform is None:
@@ -120,7 +121,7 @@ def configure_slipstream_cache():
     env var is already set.
     """
     cache_dir = get_platform_cache_dir()
-    os.environ.setdefault("SLIPSTREAM_CACHE_DIR", cache_dir)
+    os.environ.setdefault(CACHE_DIR_ENV_VAR, cache_dir)
     return cache_dir
 
 
