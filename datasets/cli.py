@@ -304,10 +304,12 @@ def check_local(entry: DatasetEntry) -> None:
         ]
         if inflight:
             entry.local_status = "downloading"
-            entry.local_problems = [
-                f"download in progress: {re.sub(r'\d+$', '', q.name)} ({fmt_bytes(q.stat().st_size)} so far)"
-                for q in inflight
-            ]
+            entry.local_problems = []
+            for q in inflight:
+                final_name = q.name.rstrip("0123456789")
+                entry.local_problems.append(
+                    f"download in progress: {final_name} ({fmt_bytes(q.stat().st_size)} so far)"
+                )
     try:
         with open(manifest) as f:
             entry.num_samples = int(json.load(f).get("num_samples"))
