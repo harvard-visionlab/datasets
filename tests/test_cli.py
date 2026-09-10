@@ -377,3 +377,46 @@ def test_missing_slipstream_cli_message(monkeypatch):
 def test_main_dispatch_returns_int(env):
     ns = argparse.Namespace(json=True)
     assert cli.cmd_list(ns) == 0
+
+
+# --------------------------------------------------------------------------- #
+# colour
+# --------------------------------------------------------------------------- #
+
+
+def test_colorize_paints_glyphs_only_when_enabled(monkeypatch):
+    line = "  imagenet10  ✓   34.9 MB   ✗ missing   ⚠ x"
+    monkeypatch.setattr(cli, "_COLOR", False)
+    assert cli.colorize(line) == line
+    monkeypatch.setattr(cli, "_COLOR", True)
+    out = cli.colorize(line)
+    assert "\033[32m✓\033[0m" in out and "\033[31m✗\033[0m" in out and "\033[33m⚠\033[0m" in out
+    # padding is computed before colouring, so stripping codes gives the original line
+    import re
+
+    assert re.sub(r"\033\[[0-9;]*m", "", out) == line
+
+
+def test_configure_color_modes(monkeypatch):
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    cli.configure_color("auto")
+    assert cli._COLOR is False  # NO_COLOR wins in auto mode
+    cli.configure_color("always")
+    assert cli._COLOR is True  # explicit flag wins over NO_COLOR
+    cli.configure_color("never")
+    assert cli._COLOR is False
+    monkeypatch.delenv("NO_COLOR")
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    cli.configure_color("auto")
+    assert cli._COLOR is True
+
+
+def test_no_color_flag_and_piped_output_plain(env, capsys):
+    make_cache(env.root, "imagenet10-s256_l512-jpeg-val")
+    cli.main(["--no-color", "path", "in10", "val"])
+    assert "\033[" not in capsys.readouterr().out
+    cli.main(["path", "in10", "val"])  # capsys is not a TTY -> auto = off
+    assert "\033[" not in capsys.readouterr().out
+    cli.main(["--color", "always", "path", "in10", "val"])
+    assert "\033[32m✓\033[0m imagenet10 val jpeg" in capsys.readouterr().out

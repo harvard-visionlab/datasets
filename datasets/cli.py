@@ -68,6 +68,39 @@ FMTS = ("jpeg", "yuv420")
 
 OK, BAD, WARN, SKIP = "✓", "✗", "⚠", "-"
 
+_GREEN, _RED, _YELLOW, _RESET = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
+_COLOR = False
+
+
+def configure_color(mode: str = "auto") -> None:
+    """mode: auto (TTY and not NO_COLOR) | always | never."""
+    global _COLOR
+    if mode == "always":
+        _COLOR = True
+    elif mode == "never":
+        _COLOR = False
+    else:
+        _COLOR = (
+            sys.stdout.isatty()
+            and not os.environ.get("NO_COLOR")
+            and os.environ.get("TERM", "") != "dumb"
+        ) or bool(os.environ.get("FORCE_COLOR"))
+
+
+def colorize(line: str) -> str:
+    """Paint status glyphs. Applied after padding so column alignment is unaffected."""
+    if not _COLOR:
+        return line
+    return (
+        line.replace(OK, f"{_GREEN}{OK}{_RESET}")
+        .replace(BAD, f"{_RED}{BAD}{_RESET}")
+        .replace(WARN, f"{_YELLOW}{WARN}{_RESET}")
+    )
+
+
+def _print(line: str = "") -> None:
+    print(colorize(line))
+
 
 # --------------------------------------------------------------------------- #
 # slipstream plumbing (generic, registry-agnostic)
@@ -405,7 +438,7 @@ def _mark(ok: bool | None) -> str:
 
 
 def print_status(status: dict, *, paths: bool = False) -> None:
-    p = print
+    p = _print
     c = status["cache"]
     a = c["access"]
     s3 = status["s3"]
@@ -607,7 +640,7 @@ def cmd_path(args: argparse.Namespace) -> int:
             print(p)
         else:
             mark = OK if (p / MANIFEST_FILE).exists() else BAD
-            print(f"{mark} {e.dataset} {e.split} {e.fmt}  {p}")
+            _print(f"{mark} {e.dataset} {e.split} {e.fmt}  {p}")
     return 0
 
 
@@ -627,14 +660,14 @@ def cmd_sync(args: argparse.Namespace) -> int:
     cache_base = Path(cache.path)
     entries, skipped = _select(name, splits, fmts, cache_base, default_note="defaults: val, jpeg")
     for s, f in skipped:
-        print(f"{WARN} {name}: no {s}/{f} cache registered, skipping")
+        _print(f"{WARN} {name}: no {s}/{f} cache registered, skipping")
 
-    print(f"Cache dir: {cache_base}  ({cache.source})")
+    _print(f"Cache dir: {cache_base}  ({cache.source})")
     todo: list[DatasetEntry] = []
     for e in entries:
         check_local(e)
         if e.local_status == "ok" and not args.force:
-            print(
+            _print(
                 f"  {OK} {e.cache_name}: already present ({fmt_bytes(e.local_bytes)}), "
                 "skipping (use --force to re-download)"
             )
@@ -652,13 +685,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
             "unreadable": "unreadable locally",
         }.get(e.local_status, "re-download")
         if e.remote_status == "ok":
-            print(
+            _print(
                 f"  {e.cache_name}: {state}; remote {e.remote_files} files, "
                 f"{fmt_bytes(e.remote_bytes)}  <- {e.remote}"
             )
             total_needed += e.remote_bytes or 0
         else:
-            print(
+            _print(
                 f"  {BAD} {e.cache_name}: remote {e.remote_status} "
                 f"({e.remote_error or 'no files at ' + e.remote})"
             )
@@ -668,25 +701,25 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     acc = cache.access
     if acc.get("free_bytes") is not None:
-        print(f"  need ~{fmt_bytes(total_needed)}, free {fmt_bytes(acc['free_bytes'])} at {cache_base}")
+        _print(f"  need ~{fmt_bytes(total_needed)}, free {fmt_bytes(acc['free_bytes'])} at {cache_base}")
         if acc["free_bytes"] < total_needed:
-            print(f"  {BAD} not enough free disk space")
+            _print(f"  {BAD} not enough free disk space")
             if not args.force:
                 return 1
     if acc["exists"] and not acc["writable"]:
-        print(f"  {BAD} cache dir {cache_base} is not writable")
+        _print(f"  {BAD} cache dir {cache_base} is not writable")
         return 1
     if not acc["exists"] and not acc["can_create"]:
-        print(f"  {BAD} cache dir {cache_base} cannot be created")
+        _print(f"  {BAD} cache dir {cache_base} cannot be created")
         return 1
 
     if args.dry_run:
-        print("[dry-run] nothing downloaded")
+        _print("[dry-run] nothing downloaded")
         return 0
 
     failed = 0
     for e in todo:
-        print()
+        _print()
         ok = download_s3_cache(
             e.remote,
             Path(e.local_path),
@@ -698,12 +731,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
             check_local(e)
             ok = e.local_status == "ok"
             if not ok:
-                print(
+                _print(
                     f"  {BAD} {e.cache_name}: downloaded but integrity check failed: "
                     f"{'; '.join(e.local_problems[:3])}"
                 )
         if ok:
-            print(f"  {OK} {e.cache_name} -> {e.local_path}")
+            _print(f"  {OK} {e.cache_name} -> {e.local_path}")
         else:
             failed += 1
     return 1 if failed else 0
@@ -730,6 +763,11 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--version", action="version", version=f"visionlab-datasets {__version__}")
+    p.add_argument(
+        "--color", choices=("auto", "always", "never"), default="auto",
+        help="Colour ✓/✗/⚠ (default: auto = only on a TTY; NO_COLOR/FORCE_COLOR honoured)",
+    )
+    p.add_argument("--no-color", dest="color", action="store_const", const="never", help="Same as --color never")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser(
@@ -779,6 +817,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    configure_color(args.color)
     try:
         return int(args.func(args) or 0)
     except KeyboardInterrupt:
