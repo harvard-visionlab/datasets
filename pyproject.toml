@@ -67,9 +67,10 @@ version = {attr = "datasets.version.__version__"}
 
 [tool.setuptools]
 # We map the top-level import 'visionlab.datasets' to your folder 'datasets'
-package-dir = { "visionlab.datasets" = "datasets" }
+package-dir = { "visionlab.datasets" = "datasets", "visionlab.datasets.downloads" = "datasets/downloads", "visionlab.datasets.prep" = "datasets/prep", "visionlab.datasets._configs" = "datasets/_configs" }
 packages = [
   "visionlab.datasets",
   "visionlab.datasets._configs",
   "visionlab.datasets.prep",
+  "visionlab.datasets.downloads",
 ]
