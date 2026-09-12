@@ -65,3 +65,19 @@ attaches `[T, 7]` poses interpolated to those frames (`VideoStore.poses_at`) plu
 native annotated pairs; any other rate uses interpolated poses. Anchors are valid when `start + (T-1)·stride <
 num_frames`. Until slipstream has a native window sampler, `notebooks/spatialvid_hq_preview.ipynb` shows this
 with `VideoStore`.
+
+## Exclusions (annotation integrity)
+
+`build_index` marks a clip `annot_ok = False` when `poses.npy`, `intrinsics.npy` or `indexes.txt` is missing or
+unreadable, or when their row counts disagree (`len(poses) == len(intrinsics) == len(indexes)` is required, since
+row *i* of each must describe the same video frame). `make_splits` puts such clips in `split = "excluded"` and
+`encode` skips them, so they are absent from every store.
+
+**HQ v1 result: 66 of 365,362 clips (0.018 %) excluded, spread over 41 groups**
+(`excluded_clips_v1.csv`, regenerated as `<out>/index/excluded_clips.csv`). All 66 have all six annotation files
+present and parseable; the download itself was size-verified against the Hub. The defect is in the released
+annotations: `poses.npy`/`intrinsics.npy` have fewer rows than `indexes.txt` (e.g. 70 poses for 76 indexed frames,
+11 for 64), and in 5 cases `poses` and `intrinsics` disagree with each other (e.g. 26 vs 12). This looks like the
+authors' MegaSaM reconstruction covering only part of the clip; the excluded clips are shorter than average
+(median 8.5 s vs 14.3 s). Because it is unknowable which frames the surviving rows refer to, no repair is
+attempted. `caption.json`/`instructions.json` of these clips are still in the index for completeness.
