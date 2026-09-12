@@ -32,6 +32,8 @@ visionlab-datasets = "visionlab.datasets.cli:main"
 video = [
     # SpatialVID video stores: decode + prep (needs FFmpeg shared libs for torchcodec; PyAV bundles its own)
     "torchcodec",
+    # torchcodec's CUDA build dlopens NVIDIA NPP; ship it via pip instead of a system CUDA install
+    "nvidia-npp-cu12; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "av",
     "pandas",
     "pyarrow",

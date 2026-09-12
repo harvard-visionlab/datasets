@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,19 @@ class ShardWriter:
 
 # ----------------------------------------------------------------------------- per-clip worker (process pool)
 
+_VSYNC_FLAG: dict[str, list[str]] = {}
+
+
+def vsync_passthrough(ffmpeg: str) -> list[str]:
+    """`-fps_mode passthrough` (FFmpeg >= 5.1) or the older `-vsync passthrough`; both keep every frame + timestamp."""
+    if ffmpeg not in _VSYNC_FLAG:
+        out = subprocess.run([ffmpeg, "-hide_banner", "-version"], capture_output=True, text=True).stdout
+        m = re.search(r"ffmpeg version (?:n)?(\d+)\.(\d+)", out)
+        major, minor = (int(m.group(1)), int(m.group(2))) if m else (99, 0)
+        _VSYNC_FLAG[ffmpeg] = ["-fps_mode", "passthrough"] if (major, minor) >= (5, 1) else ["-vsync", "passthrough"]
+    return _VSYNC_FLAG[ffmpeg]
+
+
 def encode_clip(args: tuple) -> dict:
     """Decode once, encode to every resolution. Returns {'ok', 'src': probe, 'out': {res: {'bytes','probe'}}, 'error'}."""
     clip_id, src_bytes, res_names, ffmpeg, ffprobe, tmp_root = args
@@ -115,7 +129,7 @@ def encode_clip(args: tuple) -> dict:
             o = Path(td) / f"{r}.mp4"; outs.append(o)
             cmd += ["-map", f"[o{i}]", "-c:v", "libx265", "-crf", str(X265_CRF), "-preset", X265_PRESET,
                     "-x265-params", f"keyint={k}:min-keyint={k}:scenecut=0:log-level=error", "-tag:v", "hvc1",
-                    "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", "-an", "-movflags", "+faststart", str(o)]
+                    "-pix_fmt", "yuv420p", *vsync_passthrough(ffmpeg), "-an", "-movflags", "+faststart", str(o)]
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.returncode != 0:
             return {"ok": False, "error": f"ffmpeg: {p.stderr.strip()[-300:]}", "src": sp}

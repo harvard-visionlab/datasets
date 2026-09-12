@@ -25,8 +25,14 @@ to slipstream stores, an index and versioned splits. Decisions and measurements 
 | 3 | `python -m datasets.prep.spatialvid_hq.encode --raw R --out O [--groups 1-74] [--limit N] [--ffmpeg BIN]` | video tars + `index/` | `shards/<res>/group_XXXX/` | ~44 h both resolutions (x265 medium, 16×4 threads); resumable per group |
 | 4 | `python -m datasets.prep.spatialvid_hq.merge --out O` | shards | `stores/` | minutes (sequential copy) |
 
-Run with `uv run --group video python -m ...` from the repo root. Stage 3 needs an ffmpeg with libx265
-(`conda create -p <env> -c conda-forge "ffmpeg>=7,<8"`, then `--ffmpeg <env>/bin`).
+Run with `uv run --group video python -m ...` from the repo root.
+
+**System requirement (no conda):** FFmpeg with libx265 on `PATH`, and its shared libraries for torchcodec.
+On the lab's Ubuntu 22.04 containers `apt-get install -y ffmpeg` (4.4.2: libx265, hevc_nvenc, hevc_cuvid, cuda
+hwaccel) covers both; add it to the container image. NVIDIA NPP for torchcodec's CUDA path comes from pip
+(`nvidia-npp-cu12`, in the `video` group) and is preloaded by `visionlab.datasets.video`. macOS: `brew install
+ffmpeg` and `export DYLD_LIBRARY_PATH=/opt/homebrew/lib`. Any FFmpeg 4.4–7 works (`-vsync`/`-fps_mode` chosen
+by version).
 
 ## Data model
 

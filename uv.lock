@@ -2144,6 +2144,14 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-npp-cu12"
+version = "12.4.1.87"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/8e/efdf6ffa8a63e0bc8c90d1fcbf0cd5d0e8fcc52e68de12fc79c36b587f0e/nvidia_npp_cu12-12.4.1.87-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:a586435420f08a804ebe83c09f2757d53fdee65364f2129e36d7476ab66c6197", size = 282363718, upload-time = "2025-06-05T20:09:19.678Z" },
+]
+
+[[package]]
 name = "nvidia-nvjitlink-cu12"
 version = "12.6.85"
 source = { registry = "https://pypi.org/simple" }
@@ -3538,6 +3546,7 @@ dev = [
 video = [
     { name = "av", version = "17.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "av", version = "18.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "nvidia-npp-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -3572,6 +3581,7 @@ dev = [
 ]
 video = [
     { name = "av" },
+    { name = "nvidia-npp-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "scipy" },

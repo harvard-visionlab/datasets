@@ -15,12 +15,52 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 POSE_COLS = ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
+
+_NV_PRELOADED = False
+
+
+def preload_nvidia_libs() -> list[str]:
+    """Make pip-installed NVIDIA runtime libs (NPP, cuda runtime) visible to torchcodec's CUDA core library.
+
+    torchcodec dlopens libnppicc/libnppig by soname; pip wheels put them under site-packages/nvidia/*/lib, which is
+    not on the default search path. Loading them RTLD_GLOBAL first avoids needing LD_LIBRARY_PATH. No-op off Linux.
+    FFmpeg shared libraries themselves must come from the system (e.g. `apt-get install ffmpeg`).
+    """
+    global _NV_PRELOADED
+    if _NV_PRELOADED or sys.platform != "linux":
+        return []
+    import ctypes, glob, site
+    loaded = []
+    roots = {p for p in site.getsitepackages() + [site.getusersitepackages()] if p}
+    for root in roots:
+        for pattern in ("nvidia/cuda_runtime/lib/libcudart.so.*", "nvidia/npp/lib/libnppc.so.*", "nvidia/npp/lib/libnppicc.so.*", "nvidia/npp/lib/libnppig.so.*"):
+            for lib in sorted(glob.glob(str(Path(root) / pattern))):
+                try:
+                    ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL); loaded.append(lib)
+                except OSError:
+                    pass
+    _NV_PRELOADED = True
+    return loaded
+
+
+def import_torchcodec():
+    """Import torchcodec after preloading NVIDIA libs; raises with a setup hint if FFmpeg libs are missing."""
+    preload_nvidia_libs()
+    try:
+        from torchcodec.decoders import VideoDecoder
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(
+            "torchcodec could not load its FFmpeg-backed core. Install FFmpeg shared libraries on the system "
+            "(Debian/Ubuntu: apt-get install ffmpeg; macOS: brew install ffmpeg and export DYLD_LIBRARY_PATH=/opt/homebrew/lib)."
+        ) from e
+    return VideoDecoder
 
 
 def _npy(data) -> np.ndarray:
@@ -75,7 +115,7 @@ class VideoStore:
         """torchcodec VideoDecoder over the record's bytes (cached per record; call close_decoders() to free)."""
         d = self._decoders.get(idx)
         if d is None:
-            from torchcodec.decoders import VideoDecoder
+            VideoDecoder = import_torchcodec()
             d = VideoDecoder(self.video_bytes(idx), device=self.device, seek_mode="exact")
             self._decoders[idx] = d
         return d
