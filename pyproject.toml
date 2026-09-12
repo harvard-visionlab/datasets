@@ -29,6 +29,14 @@ dependencies = [
 visionlab-datasets = "visionlab.datasets.cli:main"
 
 [dependency-groups]
+video = [
+    # SpatialVID video stores: decode + prep (needs FFmpeg shared libs for torchcodec; PyAV bundles its own)
+    "torchcodec",
+    "av",
+    "pandas",
+    "pyarrow",
+    "scipy",
+]
 dev = [
     "pytest",
     "pytest-xdist",
@@ -67,10 +75,11 @@ version = {attr = "datasets.version.__version__"}
 
 [tool.setuptools]
 # We map the top-level import 'visionlab.datasets' to your folder 'datasets'
-package-dir = { "visionlab.datasets" = "datasets", "visionlab.datasets.downloads" = "datasets/downloads", "visionlab.datasets.prep" = "datasets/prep", "visionlab.datasets._configs" = "datasets/_configs" }
+package-dir = { "visionlab.datasets" = "datasets", "visionlab.datasets.downloads" = "datasets/downloads", "visionlab.datasets.prep" = "datasets/prep", "visionlab.datasets.prep.spatialvid_hq" = "datasets/prep/spatialvid_hq", "visionlab.datasets._configs" = "datasets/_configs" }
 packages = [
   "visionlab.datasets",
   "visionlab.datasets._configs",
   "visionlab.datasets.prep",
+  "visionlab.datasets.prep.spatialvid_hq",
   "visionlab.datasets.downloads",
 ]
