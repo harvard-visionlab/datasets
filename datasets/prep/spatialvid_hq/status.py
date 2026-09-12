@@ -34,7 +34,14 @@ def main(argv=None) -> int:
         age = (time.time() - lg.stat().st_mtime) / 60
         host = lg.stem.replace("encode_", "")
         m = re.search(r"\[group_(\d+)\] done", last)
-        print(f"  {host:9s} {last[:150]}   [log updated {age:.0f} min ago]")
+        print(f"  {host:9s} {last[:150]}   [log mtime {age:.0f} min ago as seen from this host; CIFS clients may lag hours — check tmux/ffmpeg on the host for liveness]")
+    print("\nfinished groups (time = stats file mtime):")
+    tl = sorted((p.stat().st_mtime, p.name.replace(".stats.json", "")) for p in stats)
+    print("  " + ", ".join(f"{g}@{time.strftime('%H:%M', time.localtime(t))}" for t, g in tl[-20:]))
+    if len(tl) >= 2:
+        span_h = (tl[-1][0] - tl[0][0]) / 3600
+        rate = (len(tl) - 1) / span_h if span_h > 0 else float("nan")
+        print(f"  fleet rate {rate:.2f} groups/h over the last {span_h:.1f} h -> remaining {74 - len(tl)} groups ≈ {(74 - len(tl)) / rate:.1f} h")
     failed = sum(d.get("failed", 0) for d in done)
     if failed:
         print(f"\nfailed clips so far: {failed} (see shards/group_XXXX.stats.json 'errors')")
