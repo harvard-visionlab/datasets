@@ -3580,8 +3580,8 @@ video = [
 
 [[package]]
 name = "visionlab-slipstream"
-version = "0.5.0"
-source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=main#ea1f4bd95f379fd0f47604eb5d2031b8b66c6fd0" }
+version = "0.6.0"
+source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=main#31e44d79bd5fdbabdd931ba50d262978c2b121ad" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },

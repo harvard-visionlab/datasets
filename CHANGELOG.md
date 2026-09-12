@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.9.0] - 2026-09-12
+
+### Added
+- **SpatialVID-HQ preparation pipeline** (`datasets/prep/spatialvid_hq/`): `build_index` (metadata +
+  SpatialVID-RAW source ids + per-clip annotations), `make_splits` (source-level stratified train/val),
+  `encode` (640x360 and 456x256 HEVC, keyframe every 1 s, resumable per-group slipstream shards),
+  `merge` (shards -> one slipstream store per resolution). Data model in that directory's README.
+- `datasets/downloads/spatialvid_hq.py`: resumable, verified download of the raw HF release.
+- `visionlab.datasets.video.VideoStore`: reads h265 video stores (torchcodec window decode from the
+  record bytes, pose interpolation, relative camera motion). New `video` dependency group.
+- `notebooks/spatialvid_hq_preview.ipynb`: record contents, frames, trajectory, window samples, loader batch.
+
+### Changed
+- slipstream pinned to 0.6.0 (indices-aware `warmup_cache`, bank-eligible `bytes` fields, owned
+  `{data, sizes}` payloads for secondary bytes fields) — required for video stores.
+- Lock resolves torch 2.14 on all platforms (torchcodec 0.16 needs torch >= 2.11).
+
 ## [0.7.0] - 2026-05-21
 
 ### Changed
