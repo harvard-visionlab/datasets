@@ -123,14 +123,36 @@ class VideoStore:
     def close_decoders(self) -> None:
         self._decoders.clear()
 
+    # torchcodec 0.16 + NVDEC: requesting one of the last 1-2 frames of a clip raises
+    # "Requested next frame while there are no more frames left to decode" for ~6 % of HEVC clips
+    # (measured on 150 SpatialVID-HQ records; interior frames and the CPU decoder are always fine).
+    # Every decode below retries once on a CPU decoder when the CUDA decoder raises.
+    def _cpu_decoder(self, idx: int):
+        d = self._decoders.get(("cpu", idx))
+        if d is None:
+            VideoDecoder = import_torchcodec()
+            d = VideoDecoder(self.video_bytes(idx), device="cpu", seek_mode="exact"); self._decoders[("cpu", idx)] = d
+        return d
+
+    def _decode(self, idx: int, fn: str, **kw):
+        try:
+            return getattr(self.decoder(idx), fn)(**kw)
+        except RuntimeError:
+            if self.device == "cpu":
+                raise
+            return getattr(self._cpu_decoder(idx), fn)(**kw)
+
     def frames(self, idx: int, start: int, count: int, stride: int = 1):
         """Decode `count` frames starting at frame `start` with `stride` -> torchcodec FrameBatch (uint8 [T,3,H,W])."""
-        d = self.decoder(idx)
         idxs = list(range(start, start + count * stride, stride))
-        return d.get_frames_at(indices=idxs)
+        return self._decode(idx, "get_frames_at", indices=idxs)
+
+    def frames_in_range(self, idx: int, start: int, stop: int, step: int = 1):
+        """Contiguous (or strided) frames [start, stop) -> FrameBatch."""
+        return self._decode(idx, "get_frames_in_range", start=start, stop=stop, step=step)
 
     def frames_at_seconds(self, idx: int, seconds):
-        return self.decoder(idx).get_frames_played_at(seconds=list(seconds))
+        return self._decode(idx, "get_frames_played_at", seconds=list(seconds))
 
     def poses_at(self, idx: int, frame_idx, rec: dict | None = None) -> np.ndarray:
         """Interpolate world->camera poses to arbitrary video frame indices (linear t, slerp q)."""

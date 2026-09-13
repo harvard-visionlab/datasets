@@ -81,3 +81,12 @@ annotations: `poses.npy`/`intrinsics.npy` have fewer rows than `indexes.txt` (e.
 authors' MegaSaM reconstruction covering only part of the clip; the excluded clips are shorter than average
 (median 8.5 s vs 14.3 s). Because it is unknowable which frames the surviving rows refer to, no repair is
 attempted. `caption.json`/`instructions.json` of these clips are still in the index for completeness.
+
+## Known decoder caveat (torchcodec 0.16, NVDEC)
+
+With `device="cuda"`, torchcodec raises *"Requested next frame while there are no more frames left to decode"*
+when one of the last 1–2 frames of a clip is requested, for about 6 % of the HEVC clips (9/150 for the final
+frame, 2/150 for the last annotated frame; interior frames never fail; the CPU decoder always succeeds and its
+exact frame count equals the stored `num_frames` on 300/300 sampled records). `VideoStore` retries such requests
+on a CPU decoder. A window sampler should treat the final two frames of a clip as invalid anchors/targets on CUDA,
+or use the same fallback.
