@@ -9,8 +9,10 @@ Background and every measured decision: `slipstream/experiments/spatialvid_inspe
 data model: `datasets/prep/spatialvid_hq/README.md`; reader: `visionlab.datasets.video.VideoStore`.
 
 ## 1. Registry integration (`load("spatialvid-hq", split="val", fmt="h265", res="640x360")`)
-- Add a `res` axis to `DatasetConfig.remote_cache` keys `(split, fmt, res)` with `res=None` for image datasets and
-  a per-config default; accept aliases (`"640"`, `"360p"`).
+
+- Add a `res` axis to `DatasetConfig.remote_cache` keys `(split, fmt, res)`. We should never have `res=None`, not even for
+  for image datasets (when res is set to None we have a default). Even image datasets have preprocessing that sets the
+  "shortest edget" (and longest edge, e.g., s256_l512). accept aliases (`"640"`, `"360p"`).
 - Video datasets have **one store per (fmt, res)**, splits are index sets: config lists `stores[(fmt,res)] → s3 path`
   and `splits[version] → s3 parquet`; `load(...)` returns a `VideoStore`-backed dataset plus `indices` for the split
   (and later a `subset`), and `SlipstreamLoader(..., indices=)` uses them. Also resolve a QNAP path when present
@@ -18,6 +20,7 @@ data model: `datasets/prep/spatialvid_hq/README.md`; reader: `visionlab.datasets
 - Normalization stats: compute per store (`compute_normalization_stats` over decoded frames), key `"rgb"`.
 
 ## 2. Dataset cards (`datasets/cards/<name>.md`, one per dataset, methods-ready)
+
 Template: source + license + citation; what a record is; counts (clips, hours, sources, frames); preprocessing
 (codec, crf 29, keyframe 1 s, resolutions, frame-count assertion); annotations kept/dropped and their conventions
 (w2c OpenCV, normalized intrinsics, ≈5 Hz, non-metric scale); **exclusions** (criterion, 66 clips, list);
@@ -28,28 +31,40 @@ slipstream/visionlab-datasets versions). Generate the numeric parts from `index/
 `store_manifest.json` so the card cannot drift. Write `spatialvid-hq.md` first, then cards for the image datasets.
 
 ## 3. Subset = "human walking POV" (the actual training set)
+
 Metadata has no carrier label; caption keywords reach ~26 % confident walk / 44 % unknown; motion stats do not
 separate walk from drive (DECISIONS.md §3). Two signals not yet used:
+
 - **YouTube source metadata.** `index/clips.parquet` has the `source_id` for every clip (22,543 videos). Titles,
   descriptions, tags and channel names ("4K walking tour", "dashcam", "drone", "train ride", "POV bike") label
-  *whole recordings* at once, which is exactly the split unit. Fetch via the YouTube Data API (`videos.list`, 50
+  _whole recordings_ at once, which is exactly the split unit. Fetch via the YouTube Data API (`videos.list`, 50
   ids/call ≈ 450 quota units total) or `yt-dlp --dump-json --skip-download`; store in `index/sources.parquet`.
   The SpatialVID-RAW `metadata_long_duration.csv` has the same fields as the short one (no carrier), skip it.
+  **Done 2026-09-13** (`fetch_sources.py`, Data API, 141 s, 451 units): 21,997 / 22,543 sources found (97.0 % of
+  clips; 546 deleted/private → 11,026 clips with no source text), archive `index/sources_raw/youtube_api.jsonl` +
+  `index/sources.parquet`, both on QNAP and S3. Only **136 channels**; top 10 hold 37 % of clips ("Rain Everyday"
+  alone 35 k). Title+channel+tag keywords (source-level, overlapping): walk 60 % of clips, house-tour 14 %, drive
+  19 %, train 7 %, drone 5.5 %, bike 3.5 %, boat 2.3 %, no keyword 5.9 %. Channel is a natural label unit (label
+  136 channels by hand first, then per-source exceptions) and a stronger leakage unit than source: consider
+  channel-level holdout in split v2.
 - **VLM on frames** (3 frames + caption per clip, or per source) to validate/refine; hand-label 300 clips first
   (contact-sheet workflow in `slipstream/experiments/spatialvid_video_test/`).
-Deliverables: `index/carrier_v1.parquet` (clip_id → carrier, confidence, evidence), `subsets/walk_v1.parquet`
-(record indices per store), split v2 with carrier as a stratification dimension. slipstream side: a `subset`
-concept is just `indices=`; what's missing is a **named subset registry** in visionlab-datasets and an
-indices-aware `warmup_cache` (done in 0.6.0).
+  Deliverables: `index/carrier_v1.parquet` (clip_id → carrier, confidence, evidence), `subsets/walk_v1.parquet`
+  (record indices per store), split v2 with carrier as a stratification dimension. slipstream side: a `subset`
+  concept is just `indices=`; what's missing is a **named subset registry** in visionlab-datasets and an
+  indices-aware `warmup_cache` (done in 0.6.0).
 
 ## 4. slipstream indexes worth building
+
 `OptimizedCache` indexes are per-field value → record indices (used for class subsetting). Useful here:
 `scene_l1`, `time_of_day`, `weather`, `crowd_density`, `motion class`, `group_id`, `source_id` (for
 leave-source-out eval), and later `carrier`. Cheap (scalar/str fields); build once after the store exists and
 sync with the store. Duration/fps buckets can be derived at load from `num_frames`/`fps` arrays.
 
 ## 5. Demo dataloader: T frames per clip with interpolated poses
+
 Design (decide, then implement):
+
 - **Sample spec** `(record_idx, frame_idx[T])`; two samplers: `uniform_random` (T sorted random frames from the
   clip) and `window(start, stride)`; both seeded per (seed, epoch, sample) so a given seed reproduces the exact
   frame sets; exclude the last 2 frames on CUDA.
@@ -64,6 +79,7 @@ Design (decide, then implement):
   identical frame indices; throughput ≥ training demand on machina (CPU 48 workers ≈ 775 8-frame windows/s measured).
 
 ## 6. Housekeeping
+
 - Container image: add `apt-get install -y ffmpeg`; document `UV_PROJECT_ENVIRONMENT` for root containers.
 - Upstream issue to torchcodec for the NVDEC last-frame failure (repro: any store clip, `get_frame_at(n-1)`).
 - Version bump visionlab-datasets when the registry axis lands; update `README.md` usage.
