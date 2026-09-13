@@ -11,6 +11,8 @@ to slipstream stores, an index and versioned splits. Decisions and measurements 
 <out>  (working tree on local NVMe)
   index/clips.parquet                    one row per clip: metadata + source_id + timestamps + n_annot/annot_ok
   index/annotations/group_XXXX.parquet   per-clip poses/intrinsics/frame indices (flat lists), caption, instructions
+  index/sources.parquet                  one row per YouTube source: title/description/tags/channel/duration (carrier evidence)
+  index/sources_raw/youtube_*.jsonl      verbatim API responses (archive; videos disappear over time)
   splits/<version>.parquet + .report.md  clip_id -> split (source-level, stratified)
   shards/<res>/group_XXXX/               per-group slipstream shard (resumable unit)
   stores/spatialvid-hq-h265-<res>/       final slipstream cache + records.parquet + store_manifest.json
@@ -21,6 +23,7 @@ to slipstream stores, an index and versioned splits. Decisions and measurements 
 | # | command | reads | writes | full-HQ cost (machina) |
 | - | --- | --- | --- | --- |
 | 1 | `python -m datasets.prep.spatialvid_hq.build_index --raw R --out O` | CSV, SpatialVID-RAW source CSV, 74 annotation tars | `index/` | ~10 min (gzip-bound, 8 procs) |
+| 1b | `python -m datasets.prep.spatialvid_hq.fetch_sources --out O [--api-key K]` | `index/clips.parquet`, YouTube Data API v3 (`videos.list`, ~450 quota units; `--backend ytdlp` fallback) | `index/sources_raw/*.jsonl` (verbatim archive), `index/sources.parquet` (title, description, tags, channel, category, duration, stats per source) | minutes; resumable |
 | 2 | `python -m datasets.prep.spatialvid_hq.make_splits --out O --version v1 --val-clips 12000` | `index/clips.parquet` | `splits/v1.*` | seconds |
 | 3 | `python -m datasets.prep.spatialvid_hq.encode --raw R --out O [--groups 1-74] [--limit N] [--ffmpeg BIN]` | video tars + `index/` | `shards/<res>/group_XXXX/` | ~44 h both resolutions (x265 medium, 16×4 threads); resumable per group |
 | 4 | `python -m datasets.prep.spatialvid_hq.merge --out O` | shards | `stores/` | minutes (sequential copy) |
