@@ -16,7 +16,7 @@ per channel, `index/channel_sheets/<channel_id>.jpg` (rows = clips, columns = ti
 `channels_review.json` under `sheet_clips`. The clips, not the YouTube videos, are what gets labelled: SpatialVID
 keeps only motion-selected 2-15 s segments, so a talking-head channel can still contribute walkthrough b-roll.
 `clips` re-encodes the same clips into one looping preview per channel, `index/channel_clips/<channel_id>.mp4`
-(3x2 grid, 240x135 tiles, 10 fps, H.264, first `--seconds`), so camera motion is visible in the browser.
+(`--cols` x N grid, 240x135 tiles, 10 fps, H.264, first `--seconds`), so camera motion is visible in the browser.
 `import` merges `{channel_id: {carrier, confidence, notes, ...}}` into `index/channels.parquet`.
 """
 from __future__ import annotations
@@ -196,7 +196,7 @@ def sheets(lay: Layout, res: str, n_clips: int, n_frames: int, tile_w: int = 160
 def _clip_worker(args):
     """ffmpeg: 6 store clips (looped) -> one 3x2 grid mp4. Returns (channel_id, ok, message)."""
     import subprocess, tempfile
-    store_path, cid, rows, seconds, out_path, tile_w, tile_h, ffmpeg = args
+    store_path, cid, rows, seconds, out_path, tile_w, tile_h, ffmpeg, cols = args
     from ...video import VideoStore
     global _STORE
     if _STORE is None:
@@ -208,7 +208,6 @@ def _clip_worker(args):
             ins += ["-stream_loop", "-1", "-i", str(f)]
             filt.append(f"[{i}:v]scale={tile_w}:{tile_h},setsar=1,fps=10[v{i}]")
             names.append(f"[v{i}]")
-        cols = 3
         layout = "|".join(f"{(i % cols) * tile_w}_{(i // cols) * tile_h}" for i in range(len(rows)))
         even = "pad=ceil(iw/2)*2:ceil(ih/2)*2[v]"                       # libx264 needs even dimensions
         if len(rows) == 1:
@@ -221,12 +220,12 @@ def _clip_worker(args):
     return cid, p.returncode == 0, p.stderr[-300:]
 
 
-def clips_previews(lay: Layout, res: str, seconds: float, workers: int = 16, tile_w: int = 240, tile_h: int = 135, ffmpeg: str = "ffmpeg") -> None:
+def clips_previews(lay: Layout, res: str, seconds: float, workers: int = 16, tile_w: int = 240, tile_h: int = 135, ffmpeg: str = "ffmpeg", cols: int = 6) -> None:
     from concurrent.futures import ProcessPoolExecutor
     review_path = lay.index_dir / "channels_review.json"
     review = json.loads(review_path.read_text())
     out_dir = lay.index_dir / "channel_clips"; out_dir.mkdir(exist_ok=True)
-    jobs = [(str(lay.store_dir(res)), ch["channel_id"], ch["sheet_clips"], seconds, out_dir / f"{ch['channel_id']}.mp4", tile_w, tile_h, ffmpeg)
+    jobs = [(str(lay.store_dir(res)), ch["channel_id"], ch["sheet_clips"], seconds, out_dir / f"{ch['channel_id']}.mp4", tile_w, tile_h, ffmpeg, cols)
             for ch in review["channels"] if ch.get("sheet_clips")]
     n_ok = 0
     with ProcessPoolExecutor(workers) as ex:
@@ -235,7 +234,8 @@ def clips_previews(lay: Layout, res: str, seconds: float, workers: int = 16, til
             if not ok: print(f"  FAILED {cid}: {msg}")
             if i % 20 == 0: print(f"  {i}/{len(jobs)}")
     for ch in review["channels"]:
-        ch["preview"] = {"cols": 3, "rows": 2, "tile_w": tile_w, "tile_h": tile_h, "seconds": seconds} if (out_dir / f"{ch['channel_id']}.mp4").exists() else None
+        n = len(ch.get("sheet_clips", []))
+        ch["preview"] = {"cols": min(cols, n), "rows": -(-n // cols), "tile_w": tile_w, "tile_h": tile_h, "seconds": seconds} if (out_dir / f"{ch['channel_id']}.mp4").exists() else None
     review["carriers"] = CARRIERS
     review_path.write_text(json.dumps(review, ensure_ascii=False))
     print(f"wrote {n_ok}/{len(jobs)} previews to {out_dir} ({sum(f.stat().st_size for f in out_dir.glob('*.mp4')) / 1e6:.1f} MB)")
@@ -269,8 +269,9 @@ def main(argv=None) -> int:
     ap.add_argument("--samples", type=int, default=8)
     ap.add_argument("--no-thumbs", action="store_true")
     ap.add_argument("--labels", type=Path)
-    ap.add_argument("--res", default="456x256"); ap.add_argument("--clips", type=int, default=6); ap.add_argument("--frames", type=int, default=3)
+    ap.add_argument("--res", default="456x256"); ap.add_argument("--clips", type=int, default=12); ap.add_argument("--frames", type=int, default=3)
     ap.add_argument("--workers", type=int, default=16); ap.add_argument("--seconds", type=float, default=6.0); ap.add_argument("--ffmpeg", default="ffmpeg")
+    ap.add_argument("--cols", type=int, default=6)
     a = ap.parse_args(argv)
     lay = Layout(Path("/nonexistent"), a.out)
     if a.cmd == "build":
@@ -278,7 +279,7 @@ def main(argv=None) -> int:
     elif a.cmd == "sheets":
         sheets(lay, a.res, a.clips, a.frames, workers=a.workers)
     elif a.cmd == "clips":
-        clips_previews(lay, a.res, a.seconds, workers=a.workers, ffmpeg=a.ffmpeg)
+        clips_previews(lay, a.res, a.seconds, workers=a.workers, ffmpeg=a.ffmpeg, cols=a.cols)
     else:
         if not a.labels:
             sys.exit("--labels required")
