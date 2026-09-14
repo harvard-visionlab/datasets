@@ -206,7 +206,7 @@ def _clip_worker(args):
         for i, r in enumerate(rows):
             f = Path(td) / f"c{i}.mp4"; f.write_bytes(_STORE.video_bytes(r["record_idx"]))
             ins += ["-stream_loop", "-1", "-i", str(f)]
-            filt.append(f"[{i}:v]scale={tile_w}:{tile_h}:force_original_aspect_ratio=decrease,pad={tile_w}:{tile_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=10[v{i}]")
+            filt.append(f"[{i}:v]scale={tile_w}:{tile_h},setsar=1,fps=10[v{i}]")
             names.append(f"[v{i}]")
         cols = 3
         layout = "|".join(f"{(i % cols) * tile_w}_{(i // cols) * tile_h}" for i in range(len(rows)))
