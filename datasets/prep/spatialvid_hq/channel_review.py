@@ -5,10 +5,15 @@ carrier (walk / drive / drone / ...) is labelled per channel by a human, then re
 builds the review payload for the labelling page and imports the labels back.
 
     python -m datasets.prep.spatialvid_hq.channel_review build  --out O [--samples 8] [--no-thumbs]
+    python -m datasets.prep.spatialvid_hq.channel_review sheets --out O [--res 456x256] [--clips 6] [--frames 3]
     python -m datasets.prep.spatialvid_hq.channel_review import --out O --labels labels.json
 
 `build` writes `index/channels_review.json`: one entry per channel with counts, keyword rates, a draft label,
 top tags and sample sources (title, duration, clip count, 120x90 YouTube thumbnail as a data URI).
+`sheets` decodes `--frames` frames from `--clips` store clips per channel (different sources) into one JPEG grid
+per channel, `index/channel_sheets/<channel_id>.jpg` (rows = clips, columns = time), and records the clips in
+`channels_review.json` under `sheet_clips`. The clips, not the YouTube videos, are what gets labelled: SpatialVID
+keeps only motion-selected 2-15 s segments, so a talking-head channel can still contribute walkthrough b-roll.
 `import` merges `{channel_id: {carrier, confidence, notes, ...}}` into `index/channels.parquet`.
 """
 from __future__ import annotations
@@ -116,6 +121,74 @@ def build(lay: Layout, n_samples: int, thumbs: bool, seed: int = 0) -> Path:
     return out
 
 
+# ----------------------------------------------------------------------------------------------- contact sheets
+_STORE = None
+
+
+def _sheet_worker(args):
+    """Decode frames for one channel's clips -> JPEG bytes (rows = clips, cols = frames). Runs in a worker."""
+    global _STORE
+    store_path, rows, n_frames, tile_w, tile_h = args
+    import torch
+    import torch.nn.functional as F
+    from torchvision.io import encode_jpeg
+    from ..video import VideoStore
+    if _STORE is None:
+        _STORE = VideoStore(store_path, device="cpu")
+    tiles = []
+    for r in rows:
+        try:
+            n = int(_STORE.raw(r["record_idx"], "num_frames"))
+            idxs = np.linspace(0, max(n - 3, 0), n_frames).round().astype(int).tolist()   # avoid the last 2 frames
+            fb = _STORE._decode(r["record_idx"], "get_frames_at", indices=idxs)
+            x = fb.data.float()                                                          # [T,3,H,W]
+            x = F.interpolate(x, size=(tile_h, tile_w), mode="bilinear", antialias=True, align_corners=False)
+            row = torch.cat(list(x), dim=2)                                              # [3,H,T*W]
+        except Exception as e:                                                            # keep the grid aligned
+            row = torch.zeros(3, tile_h, tile_w * n_frames); r["error"] = f"{type(e).__name__}: {e}"[:120]
+        tiles.append(row)
+    _STORE.close_decoders()
+    grid = torch.cat(tiles, dim=1).clamp(0, 255).to(torch.uint8)
+    return bytes(encode_jpeg(grid, quality=72).numpy()), rows
+
+
+def sheets(lay: Layout, res: str, n_clips: int, n_frames: int, tile_w: int = 160, tile_h: int = 90, workers: int = 16, seed: int = 0) -> None:
+    from concurrent.futures import ProcessPoolExecutor
+    rng = np.random.default_rng(seed)
+    review_path = lay.index_dir / "channels_review.json"
+    review = json.loads(review_path.read_text())
+    store_path = lay.store_dir(res)
+    records = pd.read_parquet(store_path / "records.parquet")                            # record_idx, clip_id
+    rec_of = dict(zip(records["clip_id"], records["record_idx"] if "record_idx" in records else records.index))
+    clips = pd.read_parquet(lay.index_dir / "clips.parquet", columns=["clip_id", "source_id", "duration_s", "motion_tags", "scene_l1", "scene_type"])
+    src = pd.read_parquet(lay.index_dir / "sources.parquet", columns=["source_id", "channel_id", "title"])
+    clips = clips[clips["clip_id"].isin(rec_of)].merge(src, on="source_id", how="inner")
+    out_dir = lay.index_dir / "channel_sheets"; out_dir.mkdir(exist_ok=True)
+    jobs = []
+    for ch in review["channels"]:
+        g = clips[clips["channel_id"] == ch["channel_id"]]
+        # one clip per source where possible, sources chosen at random
+        picks = g.groupby("source_id", group_keys=False).apply(lambda x: x.sample(1, random_state=int(rng.integers(1 << 31))))
+        if len(picks) < n_clips:
+            extra = g.drop(picks.index).sample(min(n_clips - len(picks), len(g) - len(picks)), random_state=int(rng.integers(1 << 31)))
+            picks = pd.concat([picks, extra])
+        picks = picks.sample(min(n_clips, len(picks)), random_state=int(rng.integers(1 << 31)))
+        rows = [{"clip_id": r.clip_id, "record_idx": int(rec_of[r.clip_id]), "source_id": r.source_id, "duration_s": round(float(r.duration_s), 1),
+                 "motion_tags": r.motion_tags, "scene_l1": r.scene_l1, "scene_type": r.scene_type, "title": r.title} for r in picks.itertuples()]
+        jobs.append((ch, (str(store_path), rows, n_frames, tile_w, tile_h)))
+    done = 0
+    with ProcessPoolExecutor(workers) as ex:
+        for ch, (jpg, rows) in zip([j[0] for j in jobs], ex.map(_sheet_worker, [j[1] for j in jobs])):
+            (out_dir / f"{ch['channel_id']}.jpg").write_bytes(jpg)
+            ch["sheet_clips"] = rows; ch["sheet"] = {"cols": n_frames, "rows": len(rows), "tile_w": tile_w, "tile_h": tile_h}
+            done += 1
+            if done % 20 == 0: print(f"  {done}/{len(jobs)} channels")
+    review["sheets_res"] = res
+    review_path.write_text(json.dumps(review, ensure_ascii=False))
+    n_err = sum(1 for ch in review["channels"] for r in ch.get("sheet_clips", []) if r.get("error"))
+    print(f"wrote {len(jobs)} sheets to {out_dir} ({sum(f.stat().st_size for f in out_dir.glob('*.jpg')) / 1e6:.1f} MB), {n_err} clip decode errors")
+
+
 def import_labels(lay: Layout, labels_path: Path) -> Path:
     review = json.loads((lay.index_dir / "channels_review.json").read_text())
     labels = json.loads(labels_path.read_text())
@@ -139,15 +212,19 @@ def import_labels(lay: Layout, labels_path: Path) -> Path:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["build", "import"])
+    ap.add_argument("cmd", choices=["build", "sheets", "import"])
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--samples", type=int, default=8)
     ap.add_argument("--no-thumbs", action="store_true")
     ap.add_argument("--labels", type=Path)
+    ap.add_argument("--res", default="456x256"); ap.add_argument("--clips", type=int, default=6); ap.add_argument("--frames", type=int, default=3)
+    ap.add_argument("--workers", type=int, default=16)
     a = ap.parse_args(argv)
     lay = Layout(Path("/nonexistent"), a.out)
     if a.cmd == "build":
         build(lay, a.samples, not a.no_thumbs)
+    elif a.cmd == "sheets":
+        sheets(lay, a.res, a.clips, a.frames, workers=a.workers)
     else:
         if not a.labels:
             sys.exit("--labels required")
