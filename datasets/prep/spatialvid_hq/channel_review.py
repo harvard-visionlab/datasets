@@ -6,6 +6,7 @@ builds the review payload for the labelling page and imports the labels back.
 
     python -m datasets.prep.spatialvid_hq.channel_review build  --out O [--samples 8] [--no-thumbs]
     python -m datasets.prep.spatialvid_hq.channel_review sheets --out O [--res 456x256] [--clips 6] [--frames 3]
+    python -m datasets.prep.spatialvid_hq.channel_review clips  --out O [--res 456x256] [--seconds 6]
     python -m datasets.prep.spatialvid_hq.channel_review import --out O --labels labels.json
 
 `build` writes `index/channels_review.json`: one entry per channel with counts, keyword rates, a draft label,
@@ -14,6 +15,8 @@ top tags and sample sources (title, duration, clip count, 120x90 YouTube thumbna
 per channel, `index/channel_sheets/<channel_id>.jpg` (rows = clips, columns = time), and records the clips in
 `channels_review.json` under `sheet_clips`. The clips, not the YouTube videos, are what gets labelled: SpatialVID
 keeps only motion-selected 2-15 s segments, so a talking-head channel can still contribute walkthrough b-roll.
+`clips` re-encodes the same clips into one looping preview per channel, `index/channel_clips/<channel_id>.mp4`
+(3x2 grid, 240x135 tiles, 10 fps, H.264, first `--seconds`), so camera motion is visible in the browser.
 `import` merges `{channel_id: {carrier, confidence, notes, ...}}` into `index/channels.parquet`.
 """
 from __future__ import annotations
@@ -31,7 +34,8 @@ import pandas as pd
 
 from .common import Layout
 
-CARRIERS = ["walk", "house", "drive", "drone", "train", "boat", "bike", "mixed", "other"]
+# rig = smooth mechanical/gimbal/crane/slider motion that is not a walking person (cinematic b-roll)
+CARRIERS = ["walk", "house", "rig", "drive", "drone", "train", "boat", "bike", "mixed", "other"]
 KEYWORDS = {
     "walk": r"walk|stroll|hik|wander|on foot|trek|ramble",
     "house": r"house tour|home tour|apartment|real estate|mansion|for sale|penthouse|villa tour|interior",
@@ -189,6 +193,52 @@ def sheets(lay: Layout, res: str, n_clips: int, n_frames: int, tile_w: int = 160
     print(f"wrote {len(jobs)} sheets to {out_dir} ({sum(f.stat().st_size for f in out_dir.glob('*.jpg')) / 1e6:.1f} MB), {n_err} clip decode errors")
 
 
+def _clip_worker(args):
+    """ffmpeg: 6 store clips (looped) -> one 3x2 grid mp4. Returns (channel_id, ok, message)."""
+    import subprocess, tempfile
+    store_path, cid, rows, seconds, out_path, tile_w, tile_h, ffmpeg = args
+    from ...video import VideoStore
+    global _STORE
+    if _STORE is None:
+        _STORE = VideoStore(store_path, device="cpu")
+    with tempfile.TemporaryDirectory() as td:
+        ins, filt, names = [], [], []
+        for i, r in enumerate(rows):
+            f = Path(td) / f"c{i}.mp4"; f.write_bytes(_STORE.video_bytes(r["record_idx"]))
+            ins += ["-stream_loop", "-1", "-i", str(f)]
+            filt.append(f"[{i}:v]scale={tile_w}:{tile_h}:force_original_aspect_ratio=decrease,pad={tile_w}:{tile_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=10[v{i}]")
+            names.append(f"[v{i}]")
+        cols = 3
+        layout = "|".join(f"{(i % cols) * tile_w}_{(i // cols) * tile_h}" for i in range(len(rows)))
+        if len(rows) == 1:
+            graph = filt[0].replace("[v0]", "[v]")
+        else:
+            graph = ";".join(filt) + f";{''.join(names)}xstack=inputs={len(rows)}:layout={layout}:fill=black[v]"
+        cmd = [ffmpeg, "-y", "-loglevel", "error", *ins, "-filter_complex", graph, "-map", "[v]", "-t", str(seconds),
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(out_path)]
+        p = subprocess.run(cmd, capture_output=True, text=True)
+    return cid, p.returncode == 0, p.stderr[-300:]
+
+
+def clips_previews(lay: Layout, res: str, seconds: float, workers: int = 16, tile_w: int = 240, tile_h: int = 135, ffmpeg: str = "ffmpeg") -> None:
+    from concurrent.futures import ProcessPoolExecutor
+    review_path = lay.index_dir / "channels_review.json"
+    review = json.loads(review_path.read_text())
+    out_dir = lay.index_dir / "channel_clips"; out_dir.mkdir(exist_ok=True)
+    jobs = [(str(lay.store_dir(res)), ch["channel_id"], ch["sheet_clips"], seconds, out_dir / f"{ch['channel_id']}.mp4", tile_w, tile_h, ffmpeg)
+            for ch in review["channels"] if ch.get("sheet_clips")]
+    n_ok = 0
+    with ProcessPoolExecutor(workers) as ex:
+        for i, (cid, ok, msg) in enumerate(ex.map(_clip_worker, jobs), 1):
+            n_ok += ok
+            if not ok: print(f"  FAILED {cid}: {msg}")
+            if i % 20 == 0: print(f"  {i}/{len(jobs)}")
+    for ch in review["channels"]:
+        ch["preview"] = {"cols": 3, "rows": 2, "tile_w": tile_w, "tile_h": tile_h, "seconds": seconds} if (out_dir / f"{ch['channel_id']}.mp4").exists() else None
+    review_path.write_text(json.dumps(review, ensure_ascii=False))
+    print(f"wrote {n_ok}/{len(jobs)} previews to {out_dir} ({sum(f.stat().st_size for f in out_dir.glob('*.mp4')) / 1e6:.1f} MB)")
+
+
 def import_labels(lay: Layout, labels_path: Path) -> Path:
     review = json.loads((lay.index_dir / "channels_review.json").read_text())
     labels = json.loads(labels_path.read_text())
@@ -212,19 +262,21 @@ def import_labels(lay: Layout, labels_path: Path) -> Path:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["build", "sheets", "import"])
+    ap.add_argument("cmd", choices=["build", "sheets", "clips", "import"])
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--samples", type=int, default=8)
     ap.add_argument("--no-thumbs", action="store_true")
     ap.add_argument("--labels", type=Path)
     ap.add_argument("--res", default="456x256"); ap.add_argument("--clips", type=int, default=6); ap.add_argument("--frames", type=int, default=3)
-    ap.add_argument("--workers", type=int, default=16)
+    ap.add_argument("--workers", type=int, default=16); ap.add_argument("--seconds", type=float, default=6.0); ap.add_argument("--ffmpeg", default="ffmpeg")
     a = ap.parse_args(argv)
     lay = Layout(Path("/nonexistent"), a.out)
     if a.cmd == "build":
         build(lay, a.samples, not a.no_thumbs)
     elif a.cmd == "sheets":
         sheets(lay, a.res, a.clips, a.frames, workers=a.workers)
+    elif a.cmd == "clips":
+        clips_previews(lay, a.res, a.seconds, workers=a.workers, ffmpeg=a.ffmpeg)
     else:
         if not a.labels:
             sys.exit("--labels required")
