@@ -132,7 +132,7 @@ def _sheet_worker(args):
     import torch
     import torch.nn.functional as F
     from torchvision.io import encode_jpeg
-    from ..video import VideoStore
+    from ...video import VideoStore
     if _STORE is None:
         _STORE = VideoStore(store_path, device="cpu")
     tiles = []
