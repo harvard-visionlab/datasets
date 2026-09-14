@@ -187,7 +187,7 @@ def sheets(lay: Layout, res: str, n_clips: int, n_frames: int, tile_w: int = 160
             ch["sheet_clips"] = rows; ch["sheet"] = {"cols": n_frames, "rows": len(rows), "tile_w": tile_w, "tile_h": tile_h}
             done += 1
             if done % 20 == 0: print(f"  {done}/{len(jobs)} channels")
-    review["sheets_res"] = res
+    review["sheets_res"] = res; review["carriers"] = CARRIERS
     review_path.write_text(json.dumps(review, ensure_ascii=False))
     n_err = sum(1 for ch in review["channels"] for r in ch.get("sheet_clips", []) if r.get("error"))
     print(f"wrote {len(jobs)} sheets to {out_dir} ({sum(f.stat().st_size for f in out_dir.glob('*.jpg')) / 1e6:.1f} MB), {n_err} clip decode errors")
@@ -236,6 +236,7 @@ def clips_previews(lay: Layout, res: str, seconds: float, workers: int = 16, til
             if i % 20 == 0: print(f"  {i}/{len(jobs)}")
     for ch in review["channels"]:
         ch["preview"] = {"cols": 3, "rows": 2, "tile_w": tile_w, "tile_h": tile_h, "seconds": seconds} if (out_dir / f"{ch['channel_id']}.mp4").exists() else None
+    review["carriers"] = CARRIERS
     review_path.write_text(json.dumps(review, ensure_ascii=False))
     print(f"wrote {n_ok}/{len(jobs)} previews to {out_dir} ({sum(f.stat().st_size for f in out_dir.glob('*.mp4')) / 1e6:.1f} MB)")
 
