@@ -47,6 +47,12 @@ separate walk from drive (DECISIONS.md §3). Two signals not yet used:
   19 %, train 7 %, drone 5.5 %, bike 3.5 %, boat 2.3 %, no keyword 5.9 %. Channel is a natural label unit (label
   136 channels by hand first, then per-source exceptions) and a stronger leakage unit than source: consider
   channel-level holdout in split v2.
+  **Channel concentration inside strata (2026-09-14):** Rainy = 11.5 % of clips, 82 % of it from one channel
+  (Rain Everyday, 97 % rainy, 5 h videos); Night 44 % same channel; Interior 26 % Homeworthy; Waterfront 17 %
+  NautiStyles. Sunny/Cloudy/Daytime spread thin (top channel ≤ 8 %). Consequences to decide with subsets/split v2:
+  channel holdout (weather-balanced val can still be the same channel), a per-channel cap or sampler downweight
+  in `walk_v1`, and a channel-concentration-per-stratum table in the dataset card. Check the v1 report: sources
+  >40 clips are val-ineligible, so Rain Everyday is likely all-train and v1 val rain is small.
 - **VLM on frames** (3 frames + caption per clip, or per source) to validate/refine; hand-label 300 clips first
   (contact-sheet workflow in `slipstream/experiments/spatialvid_video_test/`).
   Deliverables: `index/carrier_v1.parquet` (clip_id → carrier, confidence, evidence), `subsets/walk_v1.parquet`
