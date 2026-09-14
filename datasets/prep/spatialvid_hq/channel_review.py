@@ -210,10 +210,11 @@ def _clip_worker(args):
             names.append(f"[v{i}]")
         cols = 3
         layout = "|".join(f"{(i % cols) * tile_w}_{(i // cols) * tile_h}" for i in range(len(rows)))
+        even = "pad=ceil(iw/2)*2:ceil(ih/2)*2[v]"                       # libx264 needs even dimensions
         if len(rows) == 1:
-            graph = filt[0].replace("[v0]", "[v]")
+            graph = filt[0].replace("[v0]", "[g]") + f";[g]{even}"
         else:
-            graph = ";".join(filt) + f";{''.join(names)}xstack=inputs={len(rows)}:layout={layout}:fill=black[v]"
+            graph = ";".join(filt) + f";{''.join(names)}xstack=inputs={len(rows)}:layout={layout}:fill=black[g];[g]{even}"
         cmd = [ffmpeg, "-y", "-loglevel", "error", *ins, "-filter_complex", graph, "-map", "[v]", "-t", str(seconds),
                "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(out_path)]
         p = subprocess.run(cmd, capture_output=True, text=True)
