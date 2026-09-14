@@ -53,6 +53,23 @@ def keyword_rates(f: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({k: txt.str.contains(p, regex=True) for k, p in KEYWORDS.items()}, index=f.index)
 
 
+def keyword_evidence(g: pd.DataFrame, n_examples: int = 4) -> dict:
+    """Per keyword: share of videos hit via title vs via tags only, the tags responsible, example titles."""
+    title = g["title"].fillna("").str.lower(); tags = g["tags"].fillna("").str.lower()
+    out = {}
+    for k, p in KEYWORDS.items():
+        in_title = title.str.contains(p, regex=True); in_tags = tags.str.contains(p, regex=True) & ~in_title
+        if not (in_title.any() or in_tags.any()):
+            continue
+        hit_tags = pd.Series([t for ts in g.loc[in_tags | in_title, "tags"] for t in json.loads(ts or "[]")
+                              if pd.Series([t.lower()]).str.contains(p, regex=True).iat[0]]).value_counts().head(5)
+        out[k] = {"title_frac": round(float(in_title.mean()), 3), "tags_only_frac": round(float(in_tags.mean()), 3),
+                  "tags": [{"tag": t, "n": int(n)} for t, n in hit_tags.items()],
+                  "title_examples": g.loc[in_title, "title"].head(n_examples).tolist(),
+                  "tags_only_examples": g.loc[in_tags, "title"].head(n_examples).tolist()}
+    return out
+
+
 def draft_label(rates: pd.Series) -> tuple[str, str]:
     top = rates.sort_values(ascending=False)
     if top.iloc[0] >= 0.8 and (len(top) < 2 or top.iloc[1] < 0.3):
@@ -98,12 +115,20 @@ def build(lay: Layout, n_samples: int, thumbs: bool, seed: int = 0) -> Path:
             "n_sources": int(len(g)), "n_clips": int(g["n_clips"].sum()), "pct_clips": round(g["n_clips"].sum() / n_clips_total * 100, 2),
             "median_duration_min": round(float(g["duration_s"].median()) / 60, 1) if g["duration_s"].notna().any() else None,
             "keyword_rates": {k: round(float(v), 3) for k, v in rates.items()},
+            "keyword_evidence": keyword_evidence(g),
             "draft_carrier": label, "draft_confidence": conf,
             "top_tags": [{"tag": t, "n": int(n)} for t, n in tags.items()],
             "category_ids": {str(int(k)): int(v) for k, v in g["category_id"].dropna().value_counts().items()},
             "samples": samples,
         })
     channels.sort(key=lambda c: -c["n_clips"])
+    prev_path = lay.index_dir / "channels_review.json"
+    if prev_path.exists():                                   # keep sheet_clips / preview from an earlier sheets/clips run
+        prev = {c["channel_id"]: c for c in json.loads(prev_path.read_text())["channels"]}
+        for c in channels:
+            for k in ("sheet_clips", "sheet", "preview"):
+                if k in prev.get(c["channel_id"], {}):
+                    c[k] = prev[c["channel_id"]][k]
     if thumbs:
         ids = [s["source_id"] for c in channels for s in c["samples"]]
         with ThreadPoolExecutor(16) as ex:
