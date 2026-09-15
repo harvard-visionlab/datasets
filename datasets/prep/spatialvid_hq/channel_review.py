@@ -7,6 +7,7 @@ builds the review payload for the labelling page and imports the labels back.
     python -m datasets.prep.spatialvid_hq.channel_review build  --out O [--samples 8] [--no-thumbs]
     python -m datasets.prep.spatialvid_hq.channel_review sheets --out O [--res 456x256] [--clips 6] [--frames 3]
     python -m datasets.prep.spatialvid_hq.channel_review clips  --out O [--res 456x256] [--seconds 6]
+    python -m datasets.prep.spatialvid_hq.channel_review minority --out O      # per minority keyword: clips from hit videos
     python -m datasets.prep.spatialvid_hq.channel_review import --out O --labels labels.json
 
 `build` writes `index/channels_review.json`: one entry per channel with counts, keyword rates, a draft label,
@@ -278,6 +279,53 @@ def title_exceptions(c: dict, min_frac: float = 0.01) -> tuple[str, list[tuple[s
     return level, exc
 
 
+def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0.05, n_clips: int = 6, workers: int = 16,
+                      tile_w: int = 240, tile_h: int = 135, ffmpeg: str = "ffmpeg", seed: int = 1) -> None:
+    """For every non-dominant keyword with >= min_rate of a channel's videos: a 6x1 preview of clips drawn only from
+    videos whose title/tags hit that keyword -> index/channel_clips/<channel_id>__<keyword>.mp4. Lets the reviewer
+    check that e.g. 'walk'-tagged videos of a driving channel are still driving (tag boilerplate) rather than walking."""
+    from concurrent.futures import ProcessPoolExecutor
+    rng = np.random.default_rng(seed)
+    review_path = lay.index_dir / "channels_review.json"
+    review = json.loads(review_path.read_text())
+    store_path = lay.store_dir(res)
+    records = pd.read_parquet(store_path / "records.parquet", columns=["record_idx", "clip_id"])
+    rec_of = dict(zip(records["clip_id"], records["record_idx"]))
+    clips = pd.read_parquet(lay.index_dir / "clips.parquet", columns=["clip_id", "source_id", "duration_s", "motion_tags", "scene_l1", "scene_type"])
+    src = pd.read_parquet(lay.index_dir / "sources.parquet", columns=["source_id", "channel_id", "title", "tags"])
+    src = src[src["channel_id"].notna()]
+    hits = keyword_rates(src.set_index("source_id")).reset_index()
+    clips = clips[clips["clip_id"].isin(rec_of)].merge(src, on="source_id").merge(hits, on="source_id")
+    out_dir = lay.index_dir / "channel_clips"; out_dir.mkdir(exist_ok=True)
+    jobs, meta = [], []
+    for ch in review["channels"]:
+        rates = ch["keyword_rates"]; dominant = max(rates, key=rates.get)
+        g = clips[clips["channel_id"] == ch["channel_id"]]
+        ch["minority_previews"] = {}
+        for k, rate in rates.items():
+            if k == dominant or rate < min_rate:
+                continue
+            gk = g[g[k]]
+            if gk.empty:
+                continue
+            picks = gk.groupby("source_id", group_keys=False).apply(lambda x: x.sample(1, random_state=int(rng.integers(1 << 31))))
+            picks = picks.sample(min(n_clips, len(picks)), random_state=int(rng.integers(1 << 31)))
+            rows = [{"clip_id": r.clip_id, "record_idx": int(rec_of[r.clip_id]), "source_id": r.source_id, "duration_s": round(float(r.duration_s), 1),
+                     "motion_tags": r.motion_tags, "scene_l1": r.scene_l1, "title": r.title,
+                     "hit": "title" if pd.Series([str(r.title).lower()]).str.contains(KEYWORDS[k], regex=True).iat[0] else "tags"} for r in picks.itertuples()]
+            out = out_dir / f"{ch['channel_id']}__{k}.mp4"
+            jobs.append((str(store_path), ch["channel_id"], rows, seconds, out, tile_w, tile_h, ffmpeg, n_clips)); meta.append((ch, k, rows))
+    n_ok = 0
+    with ProcessPoolExecutor(workers) as ex:
+        for (ch, k, rows), (cid, ok, msg) in zip(meta, ex.map(_clip_worker, [j[0:9] for j in jobs])):
+            n_ok += ok
+            if not ok: print(f"  FAILED {cid} {k}: {msg}")
+            ch["minority_previews"][k] = {"rate": ch["keyword_rates"][k], "n_sources_hit": int(len({r["source_id"] for r in rows})),
+                                          "clips": rows, "cols": len(rows), "rows": 1, "tile_w": tile_w, "tile_h": tile_h, "seconds": seconds, "ok": ok}
+    review_path.write_text(json.dumps(review, ensure_ascii=False))
+    print(f"wrote {n_ok}/{len(jobs)} minority previews for {sum(1 for ch in review['channels'] if ch['minority_previews'])} channels")
+
+
 def import_labels(lay: Layout, labels_path: Path) -> Path:
     review = json.loads((lay.index_dir / "channels_review.json").read_text())
     labels = json.loads(labels_path.read_text())
@@ -302,7 +350,7 @@ def import_labels(lay: Layout, labels_path: Path) -> Path:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["build", "sheets", "clips", "import"])
+    ap.add_argument("cmd", choices=["build", "sheets", "clips", "minority", "import"])
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--samples", type=int, default=8)
     ap.add_argument("--no-thumbs", action="store_true")
@@ -318,6 +366,8 @@ def main(argv=None) -> int:
         sheets(lay, a.res, a.clips, a.frames, workers=a.workers)
     elif a.cmd == "clips":
         clips_previews(lay, a.res, a.seconds, workers=a.workers, ffmpeg=a.ffmpeg, cols=a.cols)
+    elif a.cmd == "minority":
+        minority_previews(lay, a.res, a.seconds, workers=a.workers, ffmpeg=a.ffmpeg)
     else:
         if not a.labels:
             sys.exit("--labels required")
