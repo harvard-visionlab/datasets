@@ -266,17 +266,30 @@ def clips_previews(lay: Layout, res: str, seconds: float, workers: int = 16, til
     print(f"wrote {n_ok}/{len(jobs)} previews to {out_dir} ({sum(f.stat().st_size for f in out_dir.glob('*.mp4')) / 1e6:.1f} MB)")
 
 
+def title_exceptions(c: dict, min_frac: float = 0.01) -> tuple[str, list[tuple[str, float]]]:
+    """Confidence + per-video exceptions derived from TITLE keyword shares (tags-only hits are uploader boilerplate).
+    The dominant title keyword maps to the human's channel carrier; any other keyword with >= min_frac of titles
+    becomes a per-video override (video title matches KEYWORDS[k] -> carrier k). Mirrors autoConf() in the page."""
+    ev = c.get("keyword_evidence", {})
+    ranked = sorted(((k, e["title_frac"]) for k, e in ev.items()), key=lambda kv: -kv[1])
+    dominant = ranked[0][0] if ranked else None
+    exc = [(k, f) for k, f in ranked if k != dominant and f >= min_frac]
+    level = "clean" if not exc else ("mixed" if any(f >= 0.25 for _, f in exc) else "mostly")
+    return level, exc
+
+
 def import_labels(lay: Layout, labels_path: Path) -> Path:
     review = json.loads((lay.index_dir / "channels_review.json").read_text())
     labels = json.loads(labels_path.read_text())
     rows = []
     for c in review["channels"]:
         lab = labels.get(c["channel_id"], {})
+        level, exc = title_exceptions(c)
         rows.append({
             "channel_id": c["channel_id"], "channel_title": c["channel_title"], "n_sources": c["n_sources"], "n_clips": c["n_clips"],
             "draft_carrier": c["draft_carrier"], "draft_confidence": c["draft_confidence"],
-            "carrier": lab.get("carrier"), "confidence": lab.get("confidence"), "notes": lab.get("notes"),
-            "labelled_at": lab.get("updated_at"), "labelled": bool(lab.get("carrier")),
+            "carrier": lab.get("carrier"), "confidence": level, "title_exceptions": json.dumps(exc),
+            "notes": lab.get("notes"), "labelled_at": lab.get("updated_at"), "labelled": bool(lab.get("carrier")),
         })
     df = pd.DataFrame(rows)
     out = lay.index_dir / "channels.parquet"
