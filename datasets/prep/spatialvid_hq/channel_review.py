@@ -18,7 +18,8 @@ per channel, `index/channel_sheets/<channel_id>.jpg` (rows = clips, columns = ti
 keeps only motion-selected 2-15 s segments, so a talking-head channel can still contribute walkthrough b-roll.
 `clips` re-encodes the same clips into one looping preview per channel, `index/channel_clips/<channel_id>.mp4`
 (`--cols` x N grid, 240x135 tiles, 10 fps, H.264, first `--seconds`), so camera motion is visible in the browser.
-`import` merges `{channel_id: {carrier, confidence, notes, ...}}` into `index/channels.parquet`.
+`import` merges `{channel_id: {carrier, groups: {keyword: carrier}, notes, reviewed, ...}}` into `index/channels.parquet`:
+one carrier for the channel plus one per minority-keyword video group (videos whose title/tags hit that keyword).
 """
 from __future__ import annotations
 
@@ -338,10 +339,19 @@ def import_labels(lay: Layout, labels_path: Path) -> Path:
     for c in review["channels"]:
         lab = labels.get(c["channel_id"], {})
         level, exc = title_exceptions(c)
+        # groups: reviewer's decision per minority keyword (videos hitting that keyword in title or tags), else the draft
+        groups = {}
+        for k, m in c.get("minority_previews", {}).items():
+            e = c.get("keyword_evidence", {}).get(k, {"title_frac": 0.0})
+            draft = c["draft_carrier"] if (k in GENRE_KEYWORDS or e["title_frac"] < 0.01) else k
+            if draft == c["draft_carrier"] and lab.get("carrier"):
+                draft = lab["carrier"]                              # boilerplate group follows the reviewer's channel carrier
+            groups[k] = (lab.get("groups") or {}).get(k) or draft
         rows.append({
             "channel_id": c["channel_id"], "channel_title": c["channel_title"], "n_sources": c["n_sources"], "n_clips": c["n_clips"],
             "draft_carrier": c["draft_carrier"], "draft_confidence": c["draft_confidence"],
             "carrier": lab.get("carrier"), "confidence": level, "title_exceptions": json.dumps(exc),
+            "groups": json.dumps(groups), "reviewed": bool(lab.get("reviewed")),
             "notes": lab.get("notes"), "labelled_at": lab.get("updated_at"), "labelled": bool(lab.get("carrier")),
         })
     df = pd.DataFrame(rows)
