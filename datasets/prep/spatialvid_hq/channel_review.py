@@ -359,14 +359,14 @@ def import_labels(lay: Layout, labels_path: Path) -> Path:
     for c in review["channels"]:
         lab = labels.get(c["channel_id"], {})
         level, exc = title_exceptions(c)
-        # groups: reviewer's decision per minority keyword (videos hitting that keyword in title or tags), else the draft
-        groups = {}
+        # groups: reviewer's decision per video subgroup "<keyword>:title" (word in title) / "<keyword>:tags" (tags only),
+        # else the draft: title hit -> that carrier (genre words excepted), tags only -> the channel carrier.
+        groups = {}; decided = lab.get("groups") or {}; chan = lab.get("carrier") or c["draft_carrier"]
         for k, m in c.get("minority_previews", {}).items():
-            e = c.get("keyword_evidence", {}).get(k, {"title_frac": 0.0})
-            draft = c["draft_carrier"] if (k in GENRE_KEYWORDS or e["title_frac"] < 0.01) else k
-            if draft == c["draft_carrier"] and lab.get("carrier"):
-                draft = lab["carrier"]                              # boilerplate group follows the reviewer's channel carrier
-            groups[k] = (lab.get("groups") or {}).get(k) or draft
+            for sg in m.get("subgroups", []):
+                key = f"{k}:{sg['kind']}"
+                draft = k if (sg["kind"] == "title" and k not in GENRE_KEYWORDS) else chan
+                groups[key] = decided.get(key) or (decided.get(k) if sg["kind"] == "tags" else None) or draft
         rows.append({
             "channel_id": c["channel_id"], "channel_title": c["channel_title"], "n_sources": c["n_sources"], "n_clips": c["n_clips"],
             "draft_carrier": c["draft_carrier"], "draft_confidence": c["draft_confidence"],
