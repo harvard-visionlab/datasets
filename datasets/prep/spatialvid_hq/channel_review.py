@@ -35,8 +35,11 @@ import pandas as pd
 
 from .common import Layout
 
-# rig = smooth mechanical/gimbal/crane/slider motion that is not a walking person (cinematic b-roll)
-CARRIERS = ["walk", "house", "rig", "drive", "drone", "train", "boat", "bike", "mixed", "other"]
+# Carrier = who/what moves the camera. walk = carried by a walking person (first-person or following someone,
+# indoors or out); rig = smooth mechanical/gimbal/crane/slider motion; other = tripod pans, talking head, timelapse.
+# "house" (house tours) is a GENRE keyword, not a carrier: kept in KEYWORDS for evidence, never a label.
+CARRIERS = ["walk", "rig", "drive", "drone", "train", "boat", "bike", "mixed", "other"]
+GENRE_KEYWORDS = {"house"}
 KEYWORDS = {
     "walk": r"walk|stroll|hik|wander|on foot|trek|ramble",
     "house": r"house tour|home tour|apartment|real estate|mansion|for sale|penthouse|villa tour|interior",
@@ -72,7 +75,9 @@ def keyword_evidence(g: pd.DataFrame, n_examples: int = 4) -> dict:
 
 
 def draft_label(rates: pd.Series) -> tuple[str, str]:
-    top = rates.sort_values(ascending=False)
+    top = rates.drop(labels=[k for k in GENRE_KEYWORDS if k in rates.index]).sort_values(ascending=False)
+    if top.iloc[0] < 0.2 and rates.get("house", 0) >= 0.6:
+        return "walk", "mostly"                      # house-tour genre: usually a walking operator, sometimes a rig
     if top.iloc[0] >= 0.8 and (len(top) < 2 or top.iloc[1] < 0.3):
         return top.index[0], "clean"
     if top.iloc[0] >= 0.6:
@@ -272,7 +277,7 @@ def title_exceptions(c: dict, min_frac: float = 0.01) -> tuple[str, list[tuple[s
     The dominant title keyword maps to the human's channel carrier; any other keyword with >= min_frac of titles
     becomes a per-video override (video title matches KEYWORDS[k] -> carrier k). Mirrors autoConf() in the page."""
     ev = c.get("keyword_evidence", {})
-    ranked = sorted(((k, e["title_frac"]) for k, e in ev.items()), key=lambda kv: -kv[1])
+    ranked = sorted(((k, e["title_frac"]) for k, e in ev.items() if k not in GENRE_KEYWORDS), key=lambda kv: -kv[1])
     dominant = ranked[0][0] if ranked else None
     exc = [(k, f) for k, f in ranked if k != dominant and f >= min_frac]
     level = "clean" if not exc else ("mixed" if any(f >= 0.25 for _, f in exc) else "mostly")
