@@ -228,7 +228,8 @@ def sheets(lay: Layout, res: str, n_clips: int, n_frames: int, tile_w: int = 160
 def _clip_worker(args):
     """ffmpeg: 6 store clips (looped) -> one 3x2 grid mp4. Returns (channel_id, ok, message)."""
     import subprocess, tempfile
-    store_path, cid, rows, seconds, out_path, tile_w, tile_h, ffmpeg, cols = args
+    store_path, cid, rows, seconds, out_path, tile_w, tile_h, ffmpeg, cols = args[:9]
+    positions = args[9] if len(args) > 9 else None                                   # optional [(col,row)] per clip
     from ...video import VideoStore
     global _STORE
     if _STORE is None:
@@ -240,7 +241,8 @@ def _clip_worker(args):
             ins += ["-stream_loop", "-1", "-i", str(f)]
             filt.append(f"[{i}:v]scale={tile_w}:{tile_h},setsar=1,fps=10[v{i}]")
             names.append(f"[v{i}]")
-        layout = "|".join(f"{(i % cols) * tile_w}_{(i // cols) * tile_h}" for i in range(len(rows)))
+        pos = positions or [(i % cols, i // cols) for i in range(len(rows))]
+        layout = "|".join(f"{col * tile_w}_{row * tile_h}" for col, row in pos)
         even = "pad=ceil(iw/2)*2:ceil(ih/2)*2[v]"                       # libx264 needs even dimensions
         if len(rows) == 1:
             graph = filt[0].replace("[v0]", "[g]") + f";[g]{even}"
@@ -285,11 +287,13 @@ def title_exceptions(c: dict, min_frac: float = 0.01) -> tuple[str, list[tuple[s
     return level, exc
 
 
-def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0.05, n_clips: int = 6, workers: int = 16,
-                      tile_w: int = 240, tile_h: int = 135, ffmpeg: str = "ffmpeg", seed: int = 1) -> None:
-    """For every non-dominant keyword with >= min_rate of a channel's videos: a 6x1 preview of clips drawn only from
-    videos whose title/tags hit that keyword -> index/channel_clips/<channel_id>__<keyword>.mp4. Lets the reviewer
-    check that e.g. 'walk'-tagged videos of a driving channel are still driving (tag boilerplate) rather than walking."""
+def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0.05, min_title_videos: int = 2, n_clips: int = 6,
+                      workers: int = 16, tile_w: int = 240, tile_h: int = 135, ffmpeg: str = "ffmpeg", seed: int = 1) -> None:
+    """For every non-dominant keyword of a channel with >= min_rate of videos hit, or >= min_title_videos videos hit in
+    the TITLE: one preview mp4 `index/channel_clips/<channel_id>__<keyword>.mp4` with up to two rows of 6 clips:
+      row "title": clips from videos whose title contains the keyword (real content: draft = that carrier)
+      row "tags":  clips from videos where only the tags contain it (usually uploader boilerplate: draft = channel carrier)
+    The reviewer answers each row separately."""
     from concurrent.futures import ProcessPoolExecutor
     rng = np.random.default_rng(seed)
     review_path = lay.index_dir / "channels_review.json"
@@ -299,35 +303,51 @@ def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0
     rec_of = dict(zip(records["clip_id"], records["record_idx"]))
     clips = pd.read_parquet(lay.index_dir / "clips.parquet", columns=["clip_id", "source_id", "duration_s", "motion_tags", "scene_l1", "scene_type"])
     src = pd.read_parquet(lay.index_dir / "sources.parquet", columns=["source_id", "channel_id", "title", "tags"])
-    src = src[src["channel_id"].notna()]
-    hits = keyword_rates(src.set_index("source_id")).reset_index()
-    clips = clips[clips["clip_id"].isin(rec_of)].merge(src, on="source_id").merge(hits, on="source_id")
+    src = src[src["channel_id"].notna()].copy()
+    title = src["title"].fillna("").str.lower(); tags = src["tags"].fillna("").str.lower()
+    for k, pat in KEYWORDS.items():
+        src[f"{k}__title"] = title.str.contains(pat, regex=True)
+        src[f"{k}__tags"] = tags.str.contains(pat, regex=True) & ~src[f"{k}__title"]
+    clips = clips[clips["clip_id"].isin(rec_of)].merge(src, on="source_id")
     out_dir = lay.index_dir / "channel_clips"; out_dir.mkdir(exist_ok=True)
+
+    def pick(g: pd.DataFrame) -> list[dict]:
+        p = g.groupby("source_id", group_keys=False).apply(lambda x: x.sample(1, random_state=int(rng.integers(1 << 31))))
+        p = p.sample(min(n_clips, len(p)), random_state=int(rng.integers(1 << 31)))
+        return [{"clip_id": r.clip_id, "record_idx": int(rec_of[r.clip_id]), "source_id": r.source_id, "duration_s": round(float(r.duration_s), 1),
+                 "motion_tags": r.motion_tags, "scene_l1": r.scene_l1, "title": r.title} for r in p.itertuples()]
+
     jobs, meta = [], []
     for ch in review["channels"]:
         rates = ch["keyword_rates"]; dominant = max(rates, key=rates.get)
         g = clips[clips["channel_id"] == ch["channel_id"]]
+        n_videos = max(1, g["source_id"].nunique())
         ch["minority_previews"] = {}
         for k, rate in rates.items():
-            if k == dominant or rate < min_rate:
+            if k == dominant:
                 continue
-            gk = g[g[k]]
-            if gk.empty:
+            n_title = int(g.loc[g[f"{k}__title"], "source_id"].nunique()); n_tags = int(g.loc[g[f"{k}__tags"], "source_id"].nunique())
+            if rate < min_rate and n_title < min_title_videos:
                 continue
-            picks = gk.groupby("source_id", group_keys=False).apply(lambda x: x.sample(1, random_state=int(rng.integers(1 << 31))))
-            picks = picks.sample(min(n_clips, len(picks)), random_state=int(rng.integers(1 << 31)))
-            rows = [{"clip_id": r.clip_id, "record_idx": int(rec_of[r.clip_id]), "source_id": r.source_id, "duration_s": round(float(r.duration_s), 1),
-                     "motion_tags": r.motion_tags, "scene_l1": r.scene_l1, "title": r.title,
-                     "hit": "title" if pd.Series([str(r.title).lower()]).str.contains(KEYWORDS[k], regex=True).iat[0] else "tags"} for r in picks.itertuples()]
+            subgroups = []
+            if n_title: subgroups.append(("title", pick(g[g[f"{k}__title"]]), n_title))
+            if n_tags: subgroups.append(("tags", pick(g[g[f"{k}__tags"]]), n_tags))
+            if not subgroups:
+                continue
+            rows, positions, sg_meta = [], [], []
+            for r_i, (kind, picks, n_src) in enumerate(subgroups):
+                for c_i, row in enumerate(picks):
+                    rows.append(row); positions.append((c_i, r_i))
+                sg_meta.append({"kind": kind, "row": r_i, "n_videos": n_src, "frac": round(n_src / n_videos, 3), "clips": picks})
             out = out_dir / f"{ch['channel_id']}__{k}.mp4"
-            jobs.append((str(store_path), ch["channel_id"], rows, seconds, out, tile_w, tile_h, ffmpeg, n_clips)); meta.append((ch, k, rows))
+            jobs.append((str(store_path), ch["channel_id"], rows, seconds, out, tile_w, tile_h, ffmpeg, n_clips, positions)); meta.append((ch, k, sg_meta))
     n_ok = 0
     with ProcessPoolExecutor(workers) as ex:
-        for (ch, k, rows), (cid, ok, msg) in zip(meta, ex.map(_clip_worker, [j[0:9] for j in jobs])):
+        for (ch, k, sg_meta), (cid, ok, msg) in zip(meta, ex.map(_clip_worker, jobs)):
             n_ok += ok
             if not ok: print(f"  FAILED {cid} {k}: {msg}")
-            ch["minority_previews"][k] = {"rate": ch["keyword_rates"][k], "n_sources_hit": int(len({r["source_id"] for r in rows})),
-                                          "clips": rows, "cols": len(rows), "rows": 1, "tile_w": tile_w, "tile_h": tile_h, "seconds": seconds, "ok": ok}
+            ch["minority_previews"][k] = {"rate": ch["keyword_rates"][k], "subgroups": sg_meta, "cols": n_clips, "rows": len(sg_meta),
+                                          "tile_w": tile_w, "tile_h": tile_h, "seconds": seconds, "ok": ok}
     review_path.write_text(json.dumps(review, ensure_ascii=False))
     print(f"wrote {n_ok}/{len(jobs)} minority previews for {sum(1 for ch in review['channels'] if ch['minority_previews'])} channels")
 
