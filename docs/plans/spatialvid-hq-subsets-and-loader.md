@@ -42,62 +42,64 @@ subsets/person_carried_v0.parquet   clip_id, record_idx, source_id, channel_id, 
 A new **definition** (bike joins, carrier labels v2, a hand-vetted walking set) → `person_carried_v1.parquet`.
 A new **view** (walk only, cap Rain Everyday at 5 %, ≥8 s) → parameters, recorded in the run config.
 
-## 2. Frame rate: fixed 5 Hz time grid, everywhere
+## 2. Frame rate: a loader parameter on a time grid (10–15 Hz needed)
 
-**Decision.** Samples are defined in seconds on a 5 Hz grid `t_k = 0.2·k`, `k = 0 … floor(5·duration_s) − 1`.
-For each `t_k` the frame with nearest presentation time is used and its **true** `t_sec` is stored; poses are
-interpolated to that `t_sec` (exact at 25/30/50/60 fps; ≤ 21 ms nearest-frame error at 24/48 fps). Ego-motion is
-computed from the stored poses, so `dt` is always the true one. 5 Hz matches the annotation rate; other rates are a
-research option handled by the on-the-fly path (§3b), not by the default trainer.
+**Decision (revised 2026-09-16 evening).** DECISIONS.md addendum 2: 5 Hz reads as separate snapshots, 10 Hz is the
+threshold, 15 Hz looks continuous. So samples are defined in seconds on a grid `t_k = t0 + k / rate_hz` with
+`rate_hz` a loader parameter (15 default; 5/10/30 allowed). torchcodec `get_frames_played_at` returns the nearest
+frame per time regardless of source fps, and the **true** presentation times come back with the frames; poses are
+interpolated to those times (exact at 25/30/50/60 fps, ≤ 21 ms nearest-frame error at 24/48 fps), so ego-motion
+always uses the true `dt`.
 
-## 3. Storage for training: a 5 Hz frame store built from the subset
+## 3. Storage: the h265 video store is canonical; decode in the loader
 
-**Decision.** Build `stores/spatialvid-hq-frames5hz-456x256/` (slipstream `ImageBytes` cache) once from the
-person_carried_v0 clips, one record per 5 Hz frame, records of a clip contiguous:
+**Decision.** No frame store. At 15 Hz a JPEG frame store of the subset alone would be ~800 GB against 178 GB of
+HEVC (addendum 2 reached the same conclusion at 5 Hz already). Training decodes windows from the 456x256 h265
+store inside the loader: slipstream `DecodeVideoWindow` (branch `feat/window-loader-array-fields`, 0.7.0):
+`(record, t0, T, rate_hz)` per sample, seeded random or given `t0`, CPU thread pool or NVDEC, true `t_sec`
+returned, augmentation drawn once per window (`seed_repeat = T`), last two frames never requested (NVDEC bug),
+CPU retry.
 
-| field | type | note |
-| --- | --- | --- |
-| `image` | JPEG bytes | 456×256, quality **decide** (85 → ~15–20 KB → 175–230 GB total; measure on 1k clips first, also q75 / 384×216) |
-| `clip_rec` | int | `record_idx` into the h265 stores (join key for everything clip-level) |
-| `k`, `n_k` | int | frame index within the clip on the 5 Hz grid, and the clip's grid length |
-| `t_sec` | float | true frame time |
-| `pose` | float32[7] | w2c `[tx ty tz qx qy qz qw]` at `t_sec` (needs slipstream fixed-shape fields; fallback: 7 scalars) |
-| `intrinsics` | float32[4] | normalized |
-| `clip_id`, `source_id`, `channel_id`, `carrier` | str | denormalized for filtering and reporting |
-| `fps` | float | source fps (diagnostics only) |
+Measured 2026-09-16 on machina, 8 s windows at 15 Hz (T = 120), 456x256 store, warm cache:
 
-Why a frame store instead of decoding h265 in the loader: (a) throughput — slipstream's JPEG pipeline does
-thousands of images/s per node with per-sample seeded augmentation, vs ~100 8 s windows/s of CPU HEVC decode;
-(b) determinism — the same frames every epoch, no decoder-version drift, no NVDEC last-frame bug; (c) the 5 Hz
-grid is exactly the pose grid. The h265 stores stay the archive: any other rate or resolution is a re-extraction,
-never a re-encode. Extraction: PyAV or torchcodec CPU on the fleet, ~11.6 M frames; per-group shards + merge as
-for the h265 build (`datasets/prep/spatialvid_hq/extract_frames.py`, to write).
+| path | windows/s | note |
+| --- | ---: | --- |
+| raw torchcodec, 1 thread, 60 fps source | 5.0 /core | 200 ms per window → ~240/s ideal on 48 cores |
+| raw, 30 fps re-encode (81 % of the bytes) | 8.2 /core | 122 ms |
+| raw, 15 fps re-encode (73 % of the bytes) | 10.7 /core | 94 ms |
+| `DecodeVideoWindow` CPU pool 32 or 48 | 22 | flat across pool sizes → stage-bound, 10× below the raw ceiling |
+| `DecodeVideoWindow` NVDEC 2 / 4 workers, one GPU | 35 / 43 | second GPU and more decoders untested |
 
-### 3b. On-the-fly path (kept, not default)
+**Consequences.** (a) Tune the stage before touching the data: the raw CPU ceiling of the existing store is ~240
+windows/s, and the stage delivers 22. (b) A 15 fps re-encode buys ≤ 2× decode and 27 % storage while pinning the
+rate; only worth it if the tuned stage plus NVDEC still falls short. A 30 fps re-encode keeps 5/10/15/30 Hz exact
+and is the fallback of choice. (c) Realistic requirement: a batch of 32 windows per optimizer step at ~0.5 s/step
+is ~64 windows/s; at T = 120 and full 456x256 that is 5 GB/s of uint8 frames, so the decoder-side `resize=` to
+the training resolution is part of the design, not an option. Target for the stage: ≥ 100 windows/s at T = 120
+with resize to the model input, CPU or one GPU.
 
-`VideoStore.frames_at_seconds(idx, seconds)` over the h265 store already implements "n frames over 8 s from clips
-of mixed fps" via `get_frames_played_at`. Use it for rates ≠ 5 Hz, for the demo notebook, and for eval at full
-resolution; benchmark NVDEC before making it a training path.
+The optional on-the-fly `VideoStore.frames_at_seconds` path stays for notebooks and eval at 640x360.
 
 ## 4. Loader API
 
 ```python
 from visionlab.datasets import load
-ds = load("spatialvid-hq", split="train", fmt="frames5hz", res="456x256",
+ds = load("spatialvid-hq", split="train", fmt="h265", res="456x256",
           subset="person_carried_v0",
           where="carrier == 'walk'",          # optional pandas query over the subset table
           channel_cap=0.05)                    # optional: max share of clips per channel (random thinning, seeded)
-# ds.cache        slipstream OptimizedCache (frame store)
-# ds.clips        DataFrame: the selected clips (subset ∩ split ∩ where ∩ cap) with record ranges in the frame store
+# ds.cache        slipstream OptimizedCache (the h265 store)
+# ds.clips        DataFrame: the selected clips (subset ∩ split ∩ where ∩ cap) with record_idx
 # ds.stats        normalization stats for the store
 
-sampler = ds.window_sampler(window_s=8.0, rate_hz=5, anchors_per_clip="all", seed=0)
-#   valid anchors a: frame records with k + T <= n_k, T = window_s * rate_hz; clips shorter than window_s drop out here
-loader = SlipstreamLoader(ds.cache, indices=sampler.anchors(epoch), window=(T, 1), batch_size=64, ...)
+stage = DecodeVideoWindow(T=120, rate_hz=15, seed=0, resize=224, transforms=[RandomResizedCropBatch(...), flip])
+# clips shorter than window_s = T / rate_hz are filtered here (the stage raises on a misfit at decode time)
+recs, t0 = ds.window_sampler(window_s=8.0, anchors_per_clip=k, seed=0).sample(epoch)   # or let the stage draw t0
+loader = SlipstreamLoader(ds.cache, indices=recs, sample_data={"t0": t0}, batch_size=32, pipelines={"video": [stage]}, ...)
 for batch in loader:
-    batch["image"]      # [B, T, 3, H, W] uint8 (or decoded float after the pipeline), same crop/flip across T
-    batch["pose"]       # [B, T, 7]   batch["t_sec"]  # [B, T]
-    rel = relative_motion(batch["pose"])   # [B, T-1, 6] camera-t axes, from visionlab.datasets.video
+    batch["video"]        # [B, T, 3, H, W] uint8, same crop/flip/color across T
+    batch["video_t_sec"]  # [B, T] true frame times → poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])  [B, T, 7]
+    rel = relative_motion(poses)   # [B, T-1, 6] camera-t axes, from visionlab.datasets.video
     batch["clip_id"], batch["source_id"], batch["channel_id"], batch["carrier"]
 ```
 
@@ -105,9 +107,9 @@ for batch in loader:
 gives everything. Image datasets are untouched (`load("imagenet1k", split="val")` unchanged; `res` gets a per-dataset
 default as planned in next-steps §1).
 
-Model-side defaults (**decide**, from slipstream2's suggestion): 5 Hz, 4 s warm-up + 4 s prediction = 40 steps,
-`window_s = 8` → 144,866 clips, 87 % of frames; alternative 2 s + 2 s keeps 94 % of clips. Nothing about this is
-baked into the store.
+Model-side defaults (**decide**): 15 Hz, 4 s warm-up + 4 s prediction = 120 steps, `window_s = 8` → 144,866
+clips, 87 % of frames; alternative 2 s + 2 s keeps 94 % of clips. Nothing about rate or window is baked into the
+store; poses come from the clip's annotation arrays, interpolated to the returned frame times.
 
 ## 5. Splits before any training run
 
@@ -117,32 +119,25 @@ carrier × scene × time of day × weather × motion, **and hold out whole chann
 val-eligibility cap for walk. Report within-subset balance (walk_v0 val fraction, per-dim tables, channel
 concentration per stratum). Then `train` = subset ∩ v2-train etc.
 
-## 6. What slipstream needs (request to slipstream2)
+## 6. slipstream (status 2026-09-16 evening)
 
-1. **Window expansion in `SlipstreamLoader`**: `window=(T, stride)`. `indices` are anchors; the loader reads records
-   `a, a+stride, …, a+(T−1)·stride`, returns every field as `[B, T, …]`, repeats the per-sample augmentation seed
-   across the T frames (same crop / flip / color for a window), shards and shuffles at anchor level, and
-   `warmup_cache(indices=)` warms the expanded set. Acceptance: two runs with the same seed give identical anchor
-   order and identical pixels; `[B,40,3,256,456]` at ≥ 500 windows/s on machina from a warm cache.
-2. **Fixed-shape array fields** (`float32[7]`, `float32[4]`) in writer + storage, returned as `[B, T, 7]` tensors.
-3. `OptimizedCache.build` from a record iterator with image bytes + array fields (works today; confirm with
-   contiguous-per-clip ordering and the field types above).
-4. Later: `VideoBytes` decode stage (torchcodec, time-based) for the on-the-fly path.
-
-Until 1 lands: visionlab-datasets expands anchors to a flat index list itself, runs the loader with
-`shuffle=False` over that list, and reshapes `[B·T] → [B, T]` in `after_batch_transforms` (seeds differ across T,
-so augmentation must be off or fixed for that interim).
+Delivered on `feat/window-loader-array-fields` (0.7.0, not merged): `DecodeVideoWindow` as specified in §3,
+loader `sample_data=` (per-sample side arrays aligned with `indices`, e.g. `t0`), fixed-shape array fields
+(`float32[7]`), `seed_repeat` (one augmentation draw per window), `RandomResizedCropBatch`, and record-window
+expansion `window=(T, stride)` (built for the abandoned frame store; harmless, default off). Open: the stage's
+throughput (§3 table): profile the CPU path (GIL / per-sample decoder construction with `seek_mode="exact"` /
+main-thread stacking), try `seek_mode="approximate"` (1 s GOP), `get_frames_in_range` with step, larger B, decode
+inside the prefetch thread; NVDEC with 8 persistent decoders per GPU on both GPUs. Merge + tag is the user's call.
 
 ## 7. Work plan
 
 1. `subsets/person_carried_v0` report + `datasets/prep/spatialvid_hq/make_subset.py` (re-creates the parquet from
    `channels.parquet` + `clips.parquet`, so the definition is code).
-2. Frame-store extractor: measure quality/size on 1k clips → **decide** q / res → full extraction on the fleet →
-   merge → integrity check → S3 sync.
+2. Stage throughput to ≥ 100 windows/s (slipstream2), measured with `benchmarks/bench_video_window.py` on machina;
+   fallback: 30 fps re-encode of the subset.
 3. Split v2 (§5) and its report.
-4. Registry: `res` axis, video config shape (`stores`, `splits`, `subsets`), `load()` returning `ds.clips` +
-   `window_sampler`; `where` / `channel_cap`.
-5. Ask slipstream2 for §6; interim flat-index sampler meanwhile.
-6. Demo notebook: `[B,40,3,256,456]` batch with trajectories, seed-reproducible, throughput measured.
+4. Registry: `res` axis, video config shape (`stores`, `splits`, `subsets`), `load()` returning `ds.clips`,
+   `window_sampler`, `poses_at`; `where` / `channel_cap`; pin slipstream ≥ 0.7.0 once merged.
+5. Demo notebook: `[B,120,3,224,224]` batch at 15 Hz with trajectories, seed-reproducible, throughput measured.
 7. Card: population definition, counts, channel concentration, the 7 unlabelled channels (4.6 % of clips) and
    `mixed` (21k clips) excluded.
