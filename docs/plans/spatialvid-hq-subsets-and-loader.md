@@ -10,8 +10,9 @@ handoff of 2026-09-16.
   addresses a clip in either store.
 - Carrier decisions: 129/136 channels labelled (95.4 % of clips): walk 213k clips, drive 52k, rig 33k, mixed 21k,
   bike 9k, drone 8k, train 7k, other 6k (`index/channels.parquet`, per-video title/tags overrides included).
-- `subsets/person_carried_v0.parquet` (from slipstream2's pass, moved here with `record_idx`): walk + rig, no
-  `stationary` motion tag, speed ≤ 0.5 → **213,310 clips** (walk 187,914 / rig 25,396), 645 h, 11.6 M frames at 5 Hz.
+- `subsets/person_carried_v0.parquet` (built by `make_subset.py` from `index/carrier_v1.parquet`; reproduces
+  slipstream2's hand-run table to 0.15 %): walk + rig, no `stationary` motion tag, speed ≤ 0.5 → **213,103 clips**
+  (walk 187,713 / rig 25,390), 644 h, 106.7 M source frames, 13,222 videos, 82 channels. Report: `subsets/person_carried_v0.report.md`.
   fps: 60 (51 %), 30 (38 %), 24 (6 %), 50 (3 %), 25 (2 %). Duration floors: ≥4 s keeps 88 % clips / 97 % frames,
   ≥6 s 77 / 92, ≥8 s 68 / 87 (144,866 clips). Rain Everyday is 14.8 % of the subset, top-5 channels 36.7 %.
 - Split v1 ∩ subset = 206,698 train / **6,612 val (3.1 %)**: long recordings (all the big walking channels) were
