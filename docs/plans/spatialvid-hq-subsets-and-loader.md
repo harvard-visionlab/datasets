@@ -70,10 +70,17 @@ Measured 2026-09-16 on machina, 8 s windows at 15 Hz (T = 120), 456x256 store, w
 | `DecodeVideoWindow` 1475443, CPU pool 32 or 48 | 22 | only one batch's decodes in flight (bug) |
 | `DecodeVideoWindow` a5f9d33 (pipelined), CPU 16 / 24 / 32 / 48 workers, resize 224 | 43 / 59 / 72 / 87 | ~linear to the core count; ~370 ms per window per worker vs 200 ms raw |
 | `DecodeVideoWindow` a5f9d33, NVDEC 8 decoders one GPU / 16 two GPUs / 32 two GPUs, resize 224 | 25 / 44 / 71 | scales with worker count → host-bound, not NVDEC-bound |
+| `DecodeVideoWindow` 45cf3e2 (HWC output, reuse_output), CPU 48 workers, default torch threads | 93 | |
+| same, `OMP_NUM_THREADS=1`, 48 / 64 workers | 111 / **124** | torch/OMP parallel regions inside torchcodec cost ~19 %; use all hardware threads, 1 ffmpeg thread per decoder |
+| allocator (jemalloc, glibc thresholds), GIL switch interval, OMP_WAIT_POLICY | ±3 % | ruled out |
+| raw torchcodec in N separate *processes*, warm bytes | 2.4 total, any N | per-window time = N × 300 ms: processes time-slice as if on one CPU; threads in one process do not. Under diagnosis; irrelevant to the threaded stage, relevant to multi-process trainers |
 
-**Consequences.** (a) The stage, not the data, was the bottleneck: fixing the in-flight depth took it from 22 to
-87 windows/s on CPU; the remaining gap to the raw ceiling (~240) is per-window overhead in the stage, being profiled.
-87 windows/s already covers a first training run (~64 needed at B = 32, 0.5 s/step). (b) A 15 fps re-encode buys ≤ 2× decode and 27 % storage while pinning the
+**Consequences.** (a) The stage, not the data, was the bottleneck: in-flight depth (22 → 87), HWC output (→ 93),
+`OMP_NUM_THREADS=1` and all 64 hardware threads (→ 124 windows/s). That is ~2× what a first training run needs
+(~64 at B = 32, 0.5 s/step). Trainer settings: `num_workers = os.cpu_count()`, 1 ffmpeg thread per decoder,
+`reuse_output=True`, `OMP_NUM_THREADS=1` in the loader process (slipstream warns when it is not set). Cold reads
+from the CIFS mount cost ~400 ms per record and serialize, so `warmup_cache(indices=)` before each epoch is mandatory
+(`page_cache_residency()` checks it). (b) A 15 fps re-encode buys ≤ 2× decode and 27 % storage while pinning the
 rate; only worth it if the tuned stage plus NVDEC still falls short. A 30 fps re-encode keeps 5/10/15/30 Hz exact
 and is the fallback of choice. (c) Realistic requirement: a batch of 32 windows per optimizer step at ~0.5 s/step
 is ~64 windows/s; at T = 120 and full 456x256 that is 5 GB/s of uint8 frames, so the decoder-side `resize=` to
