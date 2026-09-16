@@ -32,6 +32,8 @@ slipstream/visionlab-datasets versions). Generate the numeric parts from `index/
 
 ## 3. Subset = "human walking POV" (the actual training set)
 
+**Design for subsets, frame rate and the loader: `spatialvid-hq-subsets-and-loader.md` (2026-09-16).**
+
 Metadata has no carrier label; caption keywords reach ~26 % confident walk / 44 % unknown; motion stats do not
 separate walk from drive (DECISIONS.md §3). Two signals not yet used:
 
