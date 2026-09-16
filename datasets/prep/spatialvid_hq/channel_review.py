@@ -86,7 +86,7 @@ def keyword_hits(src: pd.DataFrame) -> pd.DataFrame:
     return src
 
 
-def minority_keywords(rates: dict, g: pd.DataFrame, min_rate: float = 0.05, min_title_videos: int = 2) -> list[str]:
+def minority_keywords(rates: dict, g: pd.DataFrame, min_rate: float = 0.05, min_title_videos: int = 1) -> list[str]:
     """Non-dominant keywords that get their own review group for this channel: >= min_rate of videos hit, or
     >= min_title_videos videos hit in the TITLE. `g` = the channel's videos (or clips) with keyword_hits() columns.
     Single source of truth for sheets() (residual sampling) and minority_previews() (group previews)."""
@@ -328,7 +328,7 @@ def title_exceptions(c: dict, min_frac: float = 0.01) -> tuple[str, list[tuple[s
     return level, exc
 
 
-def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0.05, min_title_videos: int = 2, n_clips: int = 6,
+def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0.05, min_title_videos: int = 1, n_clips: int = 6,
                       workers: int = 16, tile_w: int = 240, tile_h: int = 135, ffmpeg: str = "ffmpeg", seed: int = 1) -> None:
     """For every non-dominant keyword of a channel with >= min_rate of videos hit, or >= min_title_videos videos hit in
     the TITLE: one preview mp4 `index/channel_clips/<channel_id>__<keyword>.mp4` with up to two rows of 6 clips:
