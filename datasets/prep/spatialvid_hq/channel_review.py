@@ -14,7 +14,8 @@ builds the review payload for the labelling page and imports the labels back.
 top tags and sample sources (title, duration, clip count, 120x90 YouTube thumbnail as a data URI).
 `sheets` decodes `--frames` frames from `--clips` store clips per channel (different sources) into one JPEG grid
 per channel, `index/channel_sheets/<channel_id>.jpg` (rows = clips, columns = time), and records the clips in
-`channels_review.json` under `sheet_clips`. The clips, not the YouTube videos, are what gets labelled: SpatialVID
+`channels_review.json` under `sheet_clips`. The clips are drawn from the channel's RESIDUAL videos only (those no
+minority-keyword group claims, `n_residual`), so Group 1 shows exactly what the channel label will apply to. The clips, not the YouTube videos, are what gets labelled: SpatialVID
 keeps only motion-selected 2-15 s segments, so a talking-head channel can still contribute walkthrough b-roll.
 `clips` re-encodes the same clips into one looping preview per channel, `index/channel_clips/<channel_id>.mp4`
 (`--cols` x N grid, 240x135 tiles, 10 fps, H.264, first `--seconds`), so camera motion is visible in the browser.
@@ -73,6 +74,39 @@ def keyword_evidence(g: pd.DataFrame, n_examples: int = 4) -> dict:
                   "title_examples": g.loc[in_title, "title"].head(n_examples).tolist(),
                   "tags_only_examples": g.loc[in_tags, "title"].head(n_examples).tolist()}
     return out
+
+
+def keyword_hits(src: pd.DataFrame) -> pd.DataFrame:
+    """Add `<k>__title` (keyword in title) and `<k>__tags` (keyword only in tags) boolean columns per KEYWORDS entry."""
+    src = src.copy()
+    title = src["title"].fillna("").str.lower(); tags = src["tags"].fillna("").str.lower()
+    for k, pat in KEYWORDS.items():
+        src[f"{k}__title"] = title.str.contains(pat, regex=True)
+        src[f"{k}__tags"] = tags.str.contains(pat, regex=True) & ~src[f"{k}__title"]
+    return src
+
+
+def minority_keywords(rates: dict, g: pd.DataFrame, min_rate: float = 0.05, min_title_videos: int = 2) -> list[str]:
+    """Non-dominant keywords that get their own review group for this channel: >= min_rate of videos hit, or
+    >= min_title_videos videos hit in the TITLE. `g` = the channel's videos (or clips) with keyword_hits() columns.
+    Single source of truth for sheets() (residual sampling) and minority_previews() (group previews)."""
+    dominant = max(rates, key=rates.get)
+    out = []
+    for k, rate in rates.items():
+        if k == dominant:
+            continue
+        n_title = int(g.loc[g[f"{k}__title"], "source_id"].nunique())
+        if rate >= min_rate or n_title >= min_title_videos:
+            out.append(k)
+    return out
+
+
+def claimed_mask(g: pd.DataFrame, keys: list[str]) -> pd.Series:
+    """Rows of `g` whose video belongs to one of the minority groups `keys` (title hit or tags-only hit)."""
+    m = pd.Series(False, index=g.index)
+    for k in keys:
+        m |= g[f"{k}__title"] | g[f"{k}__tags"]
+    return m
 
 
 def draft_label(rates: pd.Series) -> tuple[str, str]:
@@ -197,12 +231,19 @@ def sheets(lay: Layout, res: str, n_clips: int, n_frames: int, tile_w: int = 160
     records = pd.read_parquet(store_path / "records.parquet")                            # record_idx, clip_id
     rec_of = dict(zip(records["clip_id"], records["record_idx"] if "record_idx" in records else records.index))
     clips = pd.read_parquet(lay.index_dir / "clips.parquet", columns=["clip_id", "source_id", "duration_s", "motion_tags", "scene_l1", "scene_type"])
-    src = pd.read_parquet(lay.index_dir / "sources.parquet", columns=["source_id", "channel_id", "title"])
+    src = keyword_hits(pd.read_parquet(lay.index_dir / "sources.parquet", columns=["source_id", "channel_id", "title", "tags"]))
     clips = clips[clips["clip_id"].isin(rec_of)].merge(src, on="source_id", how="inner")
     out_dir = lay.index_dir / "channel_sheets"; out_dir.mkdir(exist_ok=True)
     jobs = []
     for ch in review["channels"]:
-        g = clips[clips["channel_id"] == ch["channel_id"]]
+        g_all = clips[clips["channel_id"] == ch["channel_id"]]
+        # Group 1 = the residual: videos no minority group (see minority_previews) claims, so what the reviewer
+        # sees is exactly what the channel label applies to. Falls back to all videos if nothing is left.
+        keys = minority_keywords(ch["keyword_rates"], g_all)
+        g = g_all[~claimed_mask(g_all, keys)]
+        ch["n_residual"] = int(g["source_id"].nunique())
+        if g.empty:
+            g = g_all
         # one clip per source where possible, sources chosen at random
         picks = g.groupby("source_id", group_keys=False).apply(lambda x: x.sample(1, random_state=int(rng.integers(1 << 31))))
         if len(picks) < n_clips:
@@ -303,11 +344,7 @@ def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0
     rec_of = dict(zip(records["clip_id"], records["record_idx"]))
     clips = pd.read_parquet(lay.index_dir / "clips.parquet", columns=["clip_id", "source_id", "duration_s", "motion_tags", "scene_l1", "scene_type"])
     src = pd.read_parquet(lay.index_dir / "sources.parquet", columns=["source_id", "channel_id", "title", "tags"])
-    src = src[src["channel_id"].notna()].copy()
-    title = src["title"].fillna("").str.lower(); tags = src["tags"].fillna("").str.lower()
-    for k, pat in KEYWORDS.items():
-        src[f"{k}__title"] = title.str.contains(pat, regex=True)
-        src[f"{k}__tags"] = tags.str.contains(pat, regex=True) & ~src[f"{k}__title"]
+    src = keyword_hits(src[src["channel_id"].notna()])
     clips = clips[clips["clip_id"].isin(rec_of)].merge(src, on="source_id")
     out_dir = lay.index_dir / "channel_clips"; out_dir.mkdir(exist_ok=True)
 
@@ -319,16 +356,12 @@ def minority_previews(lay: Layout, res: str, seconds: float, min_rate: float = 0
 
     jobs, meta = [], []
     for ch in review["channels"]:
-        rates = ch["keyword_rates"]; dominant = max(rates, key=rates.get)
+        rates = ch["keyword_rates"]
         g = clips[clips["channel_id"] == ch["channel_id"]]
         n_videos = max(1, g["source_id"].nunique())
         ch["minority_previews"] = {}
-        for k, rate in rates.items():
-            if k == dominant:
-                continue
+        for k in minority_keywords(rates, g, min_rate, min_title_videos):
             n_title = int(g.loc[g[f"{k}__title"], "source_id"].nunique()); n_tags = int(g.loc[g[f"{k}__tags"], "source_id"].nunique())
-            if rate < min_rate and n_title < min_title_videos:
-                continue
             subgroups = []
             if n_title: subgroups.append(("title", pick(g[g[f"{k}__title"]]), n_title))
             if n_tags: subgroups.append(("tags", pick(g[g[f"{k}__tags"]]), n_tags))
