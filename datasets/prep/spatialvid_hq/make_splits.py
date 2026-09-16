@@ -10,8 +10,13 @@ the marginal distributions of the stratification dimensions between val and the 
     uv run python -m datasets.prep.spatialvid_hq.make_splits --out <work dir> --version v1 --val-clips 12000 \
         [--dims scene_l1,tod,weather,crowd,motion] [--filter "annot_ok"] [--seed 0]
 
-Extra stratification columns (e.g. `carrier` once the VLM pass exists) can be merged into index/clips.parquet
-and named in --dims. The output has one row per clip: clip_id, source_id, split, strata key.
+v2 additions: `--carrier index/carrier_v1.parquet` merges the clip carrier (usable in --dims); `--subset
+subsets/<name>.parquet` makes the stratification targets and the report apply to that population (clips outside
+it follow their source / channel); `--val-unit channel` holds out WHOLE CHANNELS (leave-channel-out val) instead of
+whole videos, with eligibility `--max-unit-frac` (share of the population one unit may hold) and `--min-unit-clips`.
+
+    uv run python -m datasets.prep.spatialvid_hq.make_splits --out O --version v2a --subset subsets/person_carried_v0.parquet \
+        --dims scene_l1,tod,weather_c,crowd,motion,carrier --val-clips 21000 --val-unit channel --max-unit-frac 0.03
 """
 from __future__ import annotations
 
@@ -40,16 +45,18 @@ def derive_dims(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: int, main_cell_frac: float,
-           min_cell_sources: int, seed: int) -> pd.Series:
+           min_cell_sources: int, seed: int, unit: str = "source_id", min_unit_clips: int = 1) -> tuple[pd.Series, set]:
+    """Greedy assignment of whole `unit`s (videos or channels) to val, matching joint strata-cell counts.
+    Returns (split per clip, set of val units). `max_source_clips` is the per-unit clip cap for val eligibility."""
     rng = np.random.default_rng(seed)
     df = df.copy(); df["cell"] = df[dims].astype(str).agg("|".join, axis=1)
     n = len(df); target_frac = val_clips / n
     cell_total = df["cell"].value_counts()
     main_cells = set(cell_total[cell_total >= main_cell_frac * n].index)
-    # per-source summary: size, dominant cell, cell histogram
-    src = df.groupby("source_id").agg(n=("clip_id", "size"))
-    src_cells = df.groupby(["source_id", "cell"]).size()
-    eligible = src[src.n <= max_source_clips].index.to_numpy(); rng.shuffle(eligible)
+    # per-unit summary: size and cell histogram
+    src = df.groupby(unit).agg(n=("clip_id", "size"))
+    src_cells = df.groupby([unit, "cell"]).size()
+    eligible = src[(src.n <= max_source_clips) & (src.n >= min_unit_clips)].index.to_numpy(); rng.shuffle(eligible)
     val_sources: set[str] = set(); val_cell = Counter(); val_n = 0; val_src_per_cell = Counter()
     # pass 1: guarantee coverage of main cells with >= min_cell_sources sources each
     for cell in sorted(main_cells, key=lambda c: -cell_total[c]):
@@ -57,22 +64,22 @@ def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: 
         cands = cands[cands.index.isin(eligible) & ~cands.index.isin(val_sources)].sort_values(ascending=False)
         for sid in cands.index[: max(0, min_cell_sources - val_src_per_cell[cell])]:
             val_sources.add(sid); val_n += int(src.n[sid])
-            for c2, k in src_cells.xs(sid, level="source_id").items(): val_cell[c2] += int(k); val_src_per_cell[c2] += 1
+            for c2, k in src_cells.xs(sid, level=unit).items(): val_cell[c2] += int(k); val_src_per_cell[c2] += 1
     # pass 2: greedy marginal matching until the clip target is reached
     deficit = lambda c: cell_total[c] * target_frac - val_cell[c]
     for sid in eligible:
         if val_n >= val_clips: break
         if sid in val_sources: continue
-        cells = src_cells.xs(sid, level="source_id")
+        cells = src_cells.xs(sid, level=unit)
         gain = sum(min(k, max(0.0, deficit(c))) for c, k in cells.items()) / int(src.n[sid])
-        if gain < 0.5: continue          # source would mostly overfill already-satisfied cells
+        if gain < 0.5: continue          # unit would mostly overfill already-satisfied cells
         val_sources.add(sid); val_n += int(src.n[sid])
         for c, k in cells.items(): val_cell[c] += int(k)
-    return df["source_id"].isin(val_sources).map({True: "val", False: "train"})
+    return df[unit].isin(val_sources).map({True: "val", False: "train"}), val_sources
 
 
 def report(df: pd.DataFrame, dims: list[str], path: Path, version: str) -> None:
-    lines = [f"# split {version}", "", f"clips: {len(df):,}  sources: {df.source_id.nunique():,}", ""]
+    lines = [f"# split {version}", "", f"clips: {len(df):,}  sources: {df.source_id.nunique():,}" + (f"  channels: {df.channel_id.nunique()}" if "channel_id" in df else ""), ""]
     vc = df["split"].value_counts(); lines.append("| split | clips | sources |"); lines.append("| --- | ---: | ---: |")
     for s in ("train", "val"):
         lines.append(f"| {s} | {vc.get(s, 0):,} | {df.loc[df.split == s, 'source_id'].nunique():,} |")
@@ -84,6 +91,25 @@ def report(df: pd.DataFrame, dims: list[str], path: Path, version: str) -> None:
     val_src = df[df.split == "val"].groupby("source_id").size()
     lines += ["", f"val clips per source: median {val_src.median():.0f}, max {val_src.max()}; "
                   f"largest source share of val {val_src.max() / val_src.sum() * 100:.1f} %"]
+    if "channel_id" in df:
+        vc = df[df.split == "val"].groupby("channel_id").size().sort_values(ascending=False)
+        tc = df[df.split == "train"].groupby("channel_id").size().sort_values(ascending=False)
+        lines += ["", f"channels: val {len(vc)}, train {len(tc)}, in both {len(set(vc.index) & set(tc.index))}; "
+                      f"largest channel share of val {vc.iloc[0] / vc.sum() * 100:.1f} %, of train {tc.iloc[0] / tc.sum() * 100:.1f} %"]
+        titles = df.drop_duplicates("channel_id").set_index("channel_id").get("channel_title")
+        if titles is not None:
+            lines += ["", "val channels (clips): " + ", ".join(f"{titles.get(c, c)} {n:,}" for c, n in vc.head(15).items())]
+        # channel concentration inside each stratum value, val vs train
+        lines += ["", "## top-channel share inside each stratum value (val | train)", "", "| dim | value | val top channel % | train top channel % |", "| --- | --- | ---: | ---: |"]
+        for d in dims:
+            for v in df[d].value_counts().head(6).index:
+                sub = df[df[d] == v]
+                tv = sub[sub.split == "val"].groupby("channel_id").size(); tt = sub[sub.split == "train"].groupby("channel_id").size()
+                lines.append(f"| {d} | {v} | {tv.max() / tv.sum() * 100 if len(tv) else 0:.0f} | {tt.max() / tt.sum() * 100 if len(tt) else 0:.0f} |")
+    if "carrier" in df:
+        lines += ["", "## val fraction per carrier", "", "| carrier | clips | val % |", "| --- | ---: | ---: |"]
+        for c, g in df.groupby("carrier"):
+            lines.append(f"| {c} | {len(g):,} | {(g.split == 'val').mean() * 100:.1f} |")
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -95,16 +121,47 @@ def main(argv=None) -> int:
     ap.add_argument("--dims", default="scene_l1,tod,weather_c,crowd,motion")
     ap.add_argument("--filter", default="annot_ok", help="pandas query applied before splitting (excluded clips get split='excluded')")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--carrier", type=Path, default=None, help="index/carrier_v1.parquet (default if present): adds carrier + channel_id")
+    ap.add_argument("--subset", type=Path, default=None, help="subsets/<name>.parquet: stratify and report on this population")
+    ap.add_argument("--val-unit", choices=["source", "channel"], default="source", help="hold out whole videos or whole channels")
+    ap.add_argument("--max-unit-frac", type=float, default=0.03, help="channel mode: max share of the population one val channel may hold")
+    ap.add_argument("--min-unit-clips", type=int, default=100, help="channel mode: min clips for a channel to be val-eligible")
     a = ap.parse_args(argv)
     lay = Layout(Path("/nonexistent"), a.out); lay.splits_dir.mkdir(parents=True, exist_ok=True)
-    clips = derive_dims(pd.read_parquet(lay.index_dir / "clips.parquet"))
+    clips = pd.read_parquet(lay.index_dir / "clips.parquet")
+    carrier_path = a.carrier or (lay.index_dir / "carrier_v1.parquet")
+    if carrier_path.exists():
+        car = pd.read_parquet(carrier_path, columns=["clip_id", "channel_id", "carrier"])
+        clips = clips.merge(car, on="clip_id", how="left"); clips["carrier"] = clips["carrier"].fillna("no_channel")
+        ch = pd.read_parquet(lay.index_dir / "channels.parquet", columns=["channel_id", "channel_title"])
+        clips = clips.merge(ch, on="channel_id", how="left")
+    clips = derive_dims(clips)
     dims = a.dims.split(",")
     keep = clips.query(a.filter) if a.filter else clips
-    split = assign(keep, dims, a.val_clips, a.max_source_clips, a.main_cell_frac, a.min_cell_sources, a.seed)
+    if a.subset is not None:
+        sub_ids = set(pd.read_parquet(a.subset, columns=["clip_id"])["clip_id"]); clips["in_subset"] = clips["clip_id"].isin(sub_ids)
+        keep = keep[keep["clip_id"].isin(sub_ids)]
+    unit = "channel_id" if a.val_unit == "channel" else "source_id"
+    if a.val_unit == "channel":
+        keep = keep[keep["channel_id"].notna()]
+        cap = int(a.max_unit_frac * len(keep)); min_unit = a.min_unit_clips
+    else:
+        cap = a.max_source_clips; min_unit = 1
+    split, val_units = assign(keep, dims, a.val_clips, cap, a.main_cell_frac, a.min_cell_sources, a.seed, unit=unit, min_unit_clips=min_unit)
     clips["split"] = "excluded"; clips.loc[keep.index, "split"] = split.values
-    out = clips[["clip_id", "source_id", "group_id", "split"] + dims + ["dur_bucket"]]
+    # clips outside the population (or filtered) follow their unit so no video/channel straddles the split
+    rest = clips.index.difference(keep.index)
+    ok = clips.loc[rest, "annot_ok"] if "annot_ok" in clips else pd.Series(True, index=rest)
+    clips.loc[rest[ok.values], "split"] = np.where(clips.loc[rest[ok.values], unit].isin(val_units), "val", "train")
+    cols = ["clip_id", "source_id", "group_id", "split"] + [c for c in ("channel_id", "channel_title", "carrier", "in_subset") if c in clips] + dims + ["dur_bucket"]
+    out = clips[list(dict.fromkeys(cols))]
     out.to_parquet(lay.splits_dir / f"{a.version}.parquet", index=False)
-    report(out[out.split != "excluded"], dims, lay.splits_dir / f"{a.version}.report.md", a.version)
+    pop = out.loc[keep.index] if a.subset is not None else out[out.split != "excluded"]
+    report(pop, dims, lay.splits_dir / f"{a.version}.report.md", a.version)
+    if a.subset is not None:
+        print("population (subset):", pop.split.value_counts().to_dict(), "| all clips:", out.split.value_counts().to_dict())
+    if a.val_unit == "channel":
+        print(f"val channels ({len(val_units)}):", ", ".join(sorted(str(clips.loc[clips.channel_id == u, 'channel_title'].iloc[0]) for u in val_units)))
     print(out["split"].value_counts().to_string()); print(f"wrote {lay.splits_dir / a.version}.parquet and .report.md")
     return 0
 
