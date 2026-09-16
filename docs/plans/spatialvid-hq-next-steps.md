@@ -61,7 +61,9 @@ separate walk from drive (DECISIONS.md §3). Two signals not yet used:
   "virtual run", (3) pans in place. Plan: per-clip pose statistics (speed, jerk, vertical HF energy, rotation:translation)
   over walk channels → clip-level `walk_subtype`; pans are a clip filter (`move_dist`/`rot_angle`), glide vs gait
   decided per clip if the statistics separate, else a short channel pass. Whether glide joins the walking subset is a
-  research decision.
+  research decision. Definition settled 2026-09-16: **walk = person-borne camera** (locomotion + head/hand rotation),
+  vs vehicle-borne optic flow (drive/bike/boat/train/drone). Smooth "floaty" footage is stabilised walking: still walk;
+  stabilisation level becomes a continuous per-clip attribute (HF vertical/roll energy) and a subset knob, not a label.
 - **VLM on frames** (3 frames + caption per clip, or per source) to validate/refine; hand-label 300 clips first
   (contact-sheet workflow in `slipstream/experiments/spatialvid_video_test/`).
   Deliverables: `index/carrier_v1.parquet` (clip_id → carrier, confidence, evidence), `subsets/walk_v1.parquet`
