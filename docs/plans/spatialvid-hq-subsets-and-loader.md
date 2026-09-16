@@ -73,7 +73,7 @@ Measured 2026-09-16 on machina, 8 s windows at 15 Hz (T = 120), 456x256 store, w
 | `DecodeVideoWindow` 45cf3e2 (HWC output, reuse_output), CPU 48 workers, default torch threads | 93 | |
 | same, `OMP_NUM_THREADS=1`, 48 / 64 workers | 111 / **124** | torch/OMP parallel regions inside torchcodec cost ~19 %; use all hardware threads, 1 ffmpeg thread per decoder |
 | allocator (jemalloc, glibc thresholds), GIL switch interval, OMP_WAIT_POLICY | ±3 % | ruled out |
-| raw torchcodec in N separate *processes*, warm bytes | 2.4 total, any N | per-window time = N × 300 ms: processes time-slice as if on one CPU; threads in one process do not. Under diagnosis; irrelevant to the threaded stage, relevant to multi-process trainers |
+| raw torchcodec in N separate *processes*, warm bytes | 2.4 total, any N | torch's per-process intra-op pool (32 threads × N, spinning): `torch.set_num_threads(1)` in each child restores full speed (N = 8: 2,965 → 185 ms per window). Rule for DDP: cap torch threads in every process that hosts the decode stage |
 
 **Consequences.** (a) The stage, not the data, was the bottleneck: in-flight depth (22 → 87), HWC output (→ 93),
 `OMP_NUM_THREADS=1` and all 64 hardware threads (→ 124 windows/s). That is ~2× what a first training run needs
