@@ -67,11 +67,13 @@ Measured 2026-09-16 on machina, 8 s windows at 15 Hz (T = 120), 456x256 store, w
 | raw torchcodec, 1 thread, 60 fps source | 5.0 /core | 200 ms per window → ~240/s ideal on 48 cores |
 | raw, 30 fps re-encode (81 % of the bytes) | 8.2 /core | 122 ms |
 | raw, 15 fps re-encode (73 % of the bytes) | 10.7 /core | 94 ms |
-| `DecodeVideoWindow` CPU pool 32 or 48 | 22 | flat across pool sizes → stage-bound, 10× below the raw ceiling |
-| `DecodeVideoWindow` NVDEC 2 / 4 workers, one GPU | 35 / 43 | second GPU and more decoders untested |
+| `DecodeVideoWindow` 1475443, CPU pool 32 or 48 | 22 | only one batch's decodes in flight (bug) |
+| `DecodeVideoWindow` a5f9d33 (pipelined), CPU 16 / 24 / 32 / 48 workers, resize 224 | 43 / 59 / 72 / 87 | ~linear to the core count; ~370 ms per window per worker vs 200 ms raw |
+| `DecodeVideoWindow` a5f9d33, NVDEC 8 decoders one GPU / 16 two GPUs / 32 two GPUs, resize 224 | 25 / 44 / 71 | scales with worker count → host-bound, not NVDEC-bound |
 
-**Consequences.** (a) Tune the stage before touching the data: the raw CPU ceiling of the existing store is ~240
-windows/s, and the stage delivers 22. (b) A 15 fps re-encode buys ≤ 2× decode and 27 % storage while pinning the
+**Consequences.** (a) The stage, not the data, was the bottleneck: fixing the in-flight depth took it from 22 to
+87 windows/s on CPU; the remaining gap to the raw ceiling (~240) is per-window overhead in the stage, being profiled.
+87 windows/s already covers a first training run (~64 needed at B = 32, 0.5 s/step). (b) A 15 fps re-encode buys ≤ 2× decode and 27 % storage while pinning the
 rate; only worth it if the tuned stage plus NVDEC still falls short. A 30 fps re-encode keeps 5/10/15/30 Hz exact
 and is the fallback of choice. (c) Realistic requirement: a batch of 32 windows per optimizer step at ~0.5 s/step
 is ~64 windows/s; at T = 120 and full 456x256 that is 5 GB/s of uint8 frames, so the decoder-side `resize=` to
