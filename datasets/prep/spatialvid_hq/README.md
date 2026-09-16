@@ -24,6 +24,7 @@ to slipstream stores, an index and versioned splits. Decisions and measurements 
 | - | --- | --- | --- | --- |
 | 1 | `python -m datasets.prep.spatialvid_hq.build_index --raw R --out O` | CSV, SpatialVID-RAW source CSV, 74 annotation tars | `index/` | ~10 min (gzip-bound, 8 procs) |
 | 1b | `python -m datasets.prep.spatialvid_hq.fetch_sources --out O [--api-key K]` | `index/clips.parquet`, YouTube Data API v3 (`videos.list`, ~450 quota units; `--backend ytdlp` fallback) | `index/sources_raw/*.jsonl` (verbatim archive), `index/sources.parquet` (title, description, tags, channel, category, duration, stats per source) | minutes; resumable |
+| 2b | `python -m datasets.prep.spatialvid_hq.make_subset --out O [--name person_carried_v0 --carriers walk,rig --max-speed 0.5]` | `index/channels.parquet`, `index/sources.parquet`, `index/clips.parquet` | `index/carrier_v1.parquet` (clip → carrier + rule), `subsets/<name>.parquet` + `.report.md` | seconds |
 | 2 | `python -m datasets.prep.spatialvid_hq.make_splits --out O --version v1 --val-clips 12000` | `index/clips.parquet` | `splits/v1.*` | seconds |
 | 3 | `python -m datasets.prep.spatialvid_hq.encode --raw R --out O [--groups 1-74] [--limit N] [--ffmpeg BIN]` | video tars + `index/` | `shards/<res>/group_XXXX/` | ~44 h both resolutions (x265 medium, 16×4 threads); resumable per group |
 | 4 | `python -m datasets.prep.spatialvid_hq.merge --out O` | shards | `stores/` | minutes (sequential copy) |
