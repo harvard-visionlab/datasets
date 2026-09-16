@@ -53,6 +53,15 @@ separate walk from drive (DECISIONS.md §3). Two signals not yet used:
   channel holdout (weather-balanced val can still be the same channel), a per-channel cap or sampler downweight
   in `walk_v1`, and a channel-concentration-per-stratum table in the dataset card. Check the v1 report: sources
   >40 clips are val-ineligible, so Rain Everyday is likely all-train and v1 val rain is small.
+  **Channel carrier review (2026-09-14→16, `channel_review.py` + review page):** carriers = who moves the camera
+  (walk, rig, drive, drone, train, boat, bike, mixed, other; "house" retired to a genre keyword). Per channel: 12-clip
+  motion preview + one row per minority keyword split by title-hit vs tags-only (tags-only = uploader boilerplate,
+  draft = channel carrier; title hit = that carrier). Decisions live in the page DB → `channels.parquet` via `import`.
+  Status 2026-09-16: 62/136 channels reviewed (58 % of clips). Open: "walk" lumps (1) real gait, (2) smooth glide /
+  "virtual run", (3) pans in place. Plan: per-clip pose statistics (speed, jerk, vertical HF energy, rotation:translation)
+  over walk channels → clip-level `walk_subtype`; pans are a clip filter (`move_dist`/`rot_angle`), glide vs gait
+  decided per clip if the statistics separate, else a short channel pass. Whether glide joins the walking subset is a
+  research decision.
 - **VLM on frames** (3 frames + caption per clip, or per source) to validate/refine; hand-label 300 clips first
   (contact-sheet workflow in `slipstream/experiments/spatialvid_video_test/`).
   Deliverables: `index/carrier_v1.parquet` (clip_id → carrier, confidence, evidence), `subsets/walk_v1.parquet`
