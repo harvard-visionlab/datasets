@@ -99,7 +99,8 @@ class ShardWriter:
         from slipstream.cache import _get_expected_files
         file_sizes = {fn: os.path.getsize(self.dir / fn) for f, t in self.ft.items() for fn in _get_expected_files(f, t) if (self.dir / fn).exists()}
         manifest = {"worker_id": 0, "start_idx": 0, "end_idx": n, "num_samples": n, "fields": fields, "file_sizes": file_sizes, **(extra or {})}
-        pd.DataFrame(self.records).to_parquet(self.dir / "records.parquet", index=False)
+        cols = ["local_idx", "clip_id", "group_id", "num_frames", "video_bytes"]
+        pd.DataFrame(self.records, columns=cols if not self.records else None).to_parquet(self.dir / "records.parquet", index=False)
         (self.dir / "_shard_manifest.json").write_text(json.dumps(manifest, indent=1))
         return manifest
 
@@ -121,7 +122,19 @@ def vsync_passthrough(ffmpeg: str) -> list[str]:
 
 def encode_clip(args: tuple) -> dict:
     """Decode once, (optionally) decimate to `fps`, encode to every resolution.
-    Returns {'ok', 'src': probe, 'k': decimation, 'out': {res: {'bytes','probe'}}, 'error'}."""
+    Returns {'ok', 'src': probe, 'k': decimation, 'out': {res: {'bytes','probe'}}, 'error'}.
+    Variable-frame-rate sources (rare) fail the exact-grid pipeline; they are retried with `select` alone, which keeps
+    frames 0, k, 2k, ... with their original timestamps (`fallback: True` in the result)."""
+    res = _encode_clip(args, fallback=False)
+    if res["ok"] or res.get("k", 1) == 1 or res["error"].startswith(("probe", "ffmpeg")):
+        return res
+    res2 = _encode_clip(args, fallback=True)
+    if not res2["ok"]:
+        res2["error"] = f"{res['error']}; fallback: {res2['error']}"
+    return res2
+
+
+def _encode_clip(args: tuple, fallback: bool) -> dict:
     clip_id, src_bytes, res_names, fps, ffmpeg, ffprobe, tmp_root = args
     res_names = list(res_names)
     with tempfile.TemporaryDirectory(dir=tmp_root) as td:
@@ -137,7 +150,13 @@ def encode_clip(args: tuple) -> dict:
         # decimate once, then split per res. `select` keeps exactly frames 0, k, 2k, ... (the plain `fps` filter emits frame
         # jk+1 for k = 3, 4 and drops the last frame, measured 2026-09-17); `setpts` puts them on the k/src grid and the
         # trailing `fps` (a no-op on frames already on the grid) sets the stream rate so x265's CRF sees the true stored fps.
-        pre = f"select=not(mod(n\\,{kdec})),setpts=N*{kdec}/FRAME_RATE/TB,fps={num}/{den * kdec}," if kdec > 1 else ""
+        # Fallback (VFR sources, where setpts/fps drop frames): `select` alone, original timestamps kept.
+        if kdec == 1:
+            pre = ""
+        elif fallback:
+            pre = f"select=not(mod(n\\,{kdec})),"
+        else:
+            pre = f"select=not(mod(n\\,{kdec})),setpts=N*{kdec}/FRAME_RATE/TB,fps={num}/{den * kdec},"
         fc = f"[0:v]{pre}split={n}" + "".join(f"[s{i}]" for i in range(n)) + ";" + ";".join(
             f"[s{i}]scale={RES[r][0]}:{RES[r][1]}:flags=lanczos[o{i}]" for i, r in enumerate(res_names))
         cmd = [ffmpeg, "-v", "error", "-y", "-threads", str(FFMPEG_THREADS), "-i", str(src), "-filter_complex", fc]
@@ -163,11 +182,11 @@ def encode_clip(args: tuple) -> dict:
             if kdec == 1 and op["nb_frames"] != sp["nb_frames"]:
                 return {"ok": False, "error": f"frame count {op['nb_frames']} != source {sp['nb_frames']} at {r}", "src": sp}
             if kdec > 1 and not (lo <= op["nb_frames"] <= hi):
-                return {"ok": False, "error": f"frame count {op['nb_frames']} not in [{lo}, {hi}] (source {sp['nb_frames']} / {kdec}) at {r}", "src": sp}
-            if kdec > 1 and abs(op["fps"] - out_fps) > 0.02 * out_fps:
-                return {"ok": False, "error": f"stored fps {op['fps']:.3f} != expected {out_fps:.3f} at {r}", "src": sp}
+                return {"ok": False, "error": f"frame count {op['nb_frames']} not in [{lo}, {hi}] (source {sp['nb_frames']} / {kdec}) at {r}", "src": sp, "k": kdec}
+            if kdec > 1 and not fallback and abs(op["fps"] - out_fps) > 0.02 * out_fps:
+                return {"ok": False, "error": f"stored fps {op['fps']:.3f} != expected {out_fps:.3f} at {r}", "src": sp, "k": kdec}
             out[r] = {"bytes": o.read_bytes(), "probe": op}
-        return {"ok": True, "src": sp, "k": kdec, "out": out}
+        return {"ok": True, "src": sp, "k": kdec, "out": out, "fallback": fallback}
 
 
 # ----------------------------------------------------------------------------- group driver
@@ -228,7 +247,9 @@ def missing_clips(lay: Layout, gid: int, res: str, fps: int | None, include_patc
     for tag in ("", "_patch") if include_patch else ("",):
         rp = shard_path(lay, res, gid, fps, tag) / "records.parquet"
         if rp.exists():
-            have |= set(pd.read_parquet(rp, columns=["clip_id"])["clip_id"])
+            df = pd.read_parquet(rp)                     # a patch shard with 0 written clips has no columns at all
+            if "clip_id" in df:
+                have |= set(df["clip_id"])
     return set(eligible) - have
 
 
@@ -263,6 +284,8 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
                                dict(clip_id=cid, group_id=gid, num_frames=res["out"][r]["probe"]["nb_frames"], video_bytes=len(res["out"][r]["bytes"])))
                 stats["bytes"][r] += len(res["out"][r]["bytes"])
             stats["written"] += 1; stats["decimation"][str(res.get("k", 1))] += 1
+            if res.get("fallback"):
+                stats["decimation"]["vfr_fallback"] += 1
             if stats["written"] % log_every == 0:
                 el = time.time() - t0; rate = stats["written"] / el
                 print(f"[{gname}] {stats['written']}/{cap} clips, {rate:.2f} clips/s, eta {(cap - stats['written']) / max(rate, 1e-6) / 60:.1f} min, "
