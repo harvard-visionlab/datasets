@@ -106,6 +106,9 @@ def report(df: pd.DataFrame, dims: list[str], path: Path, version: str) -> None:
                 sub = df[df[d] == v]
                 tv = sub[sub.split == "val"].groupby("channel_id").size(); tt = sub[sub.split == "train"].groupby("channel_id").size()
                 lines.append(f"| {d} | {v} | {tv.max() / tv.sum() * 100 if len(tv) else 0:.0f} | {tt.max() / tt.sum() * 100 if len(tt) else 0:.0f} |")
+    if "val_kind" in df and (df.val_kind != "").any():
+        vk = df[df.split == "val"].val_kind.value_counts()
+        lines += ["", "val composition: " + ", ".join(f"{k}-holdout {n:,} clips" for k, n in vk.items())]
     if "carrier" in df:
         lines += ["", "## val fraction per carrier", "", "| carrier | clips | val % |", "| --- | ---: | ---: |"]
         for c, g in df.groupby("carrier"):
@@ -123,7 +126,9 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--carrier", type=Path, default=None, help="index/carrier_v1.parquet (default if present): adds carrier + channel_id")
     ap.add_argument("--subset", type=Path, default=None, help="subsets/<name>.parquet: stratify and report on this population")
-    ap.add_argument("--val-unit", choices=["source", "channel"], default="source", help="hold out whole videos or whole channels")
+    ap.add_argument("--val-unit", choices=["source", "channel", "both"], default="source",
+                    help="hold out whole videos, whole channels, or (both) a channel-holdout core of --val-channel-clips filled to --val-clips with whole videos")
+    ap.add_argument("--val-channel-clips", type=int, default=10000, help="both: clips to hold out as whole channels before the video-level fill")
     ap.add_argument("--max-unit-frac", type=float, default=0.03, help="channel mode: max share of the population one val channel may hold")
     ap.add_argument("--min-unit-clips", type=int, default=100, help="channel mode: min clips for a channel to be val-eligible")
     a = ap.parse_args(argv)
@@ -141,27 +146,43 @@ def main(argv=None) -> int:
     if a.subset is not None:
         sub_ids = set(pd.read_parquet(a.subset, columns=["clip_id"])["clip_id"]); clips["in_subset"] = clips["clip_id"].isin(sub_ids)
         keep = keep[keep["clip_id"].isin(sub_ids)]
-    unit = "channel_id" if a.val_unit == "channel" else "source_id"
-    if a.val_unit == "channel":
-        keep = keep[keep["channel_id"].notna()]
-        cap = int(a.max_unit_frac * len(keep)); min_unit = a.min_unit_clips
+    clips["split"] = "excluded"; clips["val_kind"] = ""
+    if a.val_unit == "source":
+        unit = "source_id"
+        split, val_units = assign(keep, dims, a.val_clips, a.max_source_clips, a.main_cell_frac, a.min_cell_sources, a.seed)
+        clips.loc[keep.index, "split"] = split.values; clips.loc[keep.index[split.values == "val"], "val_kind"] = "video"
     else:
-        cap = a.max_source_clips; min_unit = 1
-    split, val_units = assign(keep, dims, a.val_clips, cap, a.main_cell_frac, a.min_cell_sources, a.seed, unit=unit, min_unit_clips=min_unit)
-    clips["split"] = "excluded"; clips.loc[keep.index, "split"] = split.values
+        keep = keep[keep["channel_id"].notna()]
+        cap = int(a.max_unit_frac * len(keep)); n_ch = a.val_clips if a.val_unit == "channel" else a.val_channel_clips
+        # whole channels: one unit per main cell is enough coverage (5 would force far too many channels in)
+        split_c, val_channels = assign(keep, dims, n_ch, cap, a.main_cell_frac, min(a.min_cell_sources, 1), a.seed, unit="channel_id", min_unit_clips=a.min_unit_clips)
+        clips.loc[keep.index, "split"] = split_c.values; clips.loc[keep.index[split_c.values == "val"], "val_kind"] = "channel"
+        val_units = set(val_channels); unit = "channel_id"
+        if a.val_unit == "both":
+            rest = keep[split_c.values == "train"]
+            # video-level fill: targets are the population marginals, minus what the channel core already holds
+            split_s, val_sources = assign(rest, dims, a.val_clips - int((split_c == "val").sum()), a.max_source_clips, a.main_cell_frac, a.min_cell_sources, a.seed)
+            clips.loc[rest.index[split_s.values == "val"], ["split", "val_kind"]] = ["val", "video"]
+            val_units_src = set(val_sources)
     # clips outside the population (or filtered) follow their unit so no video/channel straddles the split
-    rest = clips.index.difference(keep.index)
-    ok = clips.loc[rest, "annot_ok"] if "annot_ok" in clips else pd.Series(True, index=rest)
-    clips.loc[rest[ok.values], "split"] = np.where(clips.loc[rest[ok.values], unit].isin(val_units), "val", "train")
-    cols = ["clip_id", "source_id", "group_id", "split"] + [c for c in ("channel_id", "channel_title", "carrier", "in_subset") if c in clips] + dims + ["dur_bucket"]
+    rest_idx = clips.index.difference(keep.index)
+    ok = clips.loc[rest_idx, "annot_ok"] if "annot_ok" in clips else pd.Series(True, index=rest_idx)
+    ri = rest_idx[ok.values]
+    is_val = clips.loc[ri, unit].isin(val_units)
+    if a.val_unit == "both":
+        is_val = is_val | clips.loc[ri, "source_id"].isin(val_units_src)
+    clips.loc[ri, "split"] = np.where(is_val, "val", "train")
+    # clips outside the population (or filtered) follow their unit so no video/channel straddles the split
+    cols = ["clip_id", "source_id", "group_id", "split", "val_kind"] + [c for c in ("channel_id", "channel_title", "carrier", "in_subset") if c in clips] + dims + ["dur_bucket"]
     out = clips[list(dict.fromkeys(cols))]
     out.to_parquet(lay.splits_dir / f"{a.version}.parquet", index=False)
     pop = out.loc[keep.index] if a.subset is not None else out[out.split != "excluded"]
     report(pop, dims, lay.splits_dir / f"{a.version}.report.md", a.version)
     if a.subset is not None:
         print("population (subset):", pop.split.value_counts().to_dict(), "| all clips:", out.split.value_counts().to_dict())
-    if a.val_unit == "channel":
+    if a.val_unit != "source":
         print(f"val channels ({len(val_units)}):", ", ".join(sorted(str(clips.loc[clips.channel_id == u, 'channel_title'].iloc[0]) for u in val_units)))
+        print("val_kind within population:", pop.val_kind.value_counts().to_dict())
     print(out["split"].value_counts().to_string()); print(f"wrote {lay.splits_dir / a.version}.parquet and .report.md")
     return 0
 
