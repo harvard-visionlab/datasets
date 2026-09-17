@@ -153,13 +153,18 @@ def encode_clip(args: tuple) -> dict:
         # ~0.03 % of sources are slightly variable-rate (avg_frame_rate 59.5-59.8, 29.87): their timestamps pass through
         # unchanged, so allow the last frame to fall off the grid and a 2 % rate difference (30 fps pass 2026-09-17 lost
         # 116 clips to the exact checks; timestamps, not the nominal rate, are what the loader uses).
-        expect = {math.ceil(sp["nb_frames"] / kdec), sp["nb_frames"] // kdec}
+        # Passthrough (k = 1) keeps every frame and timestamp, so the source's reported rate is irrelevant (a 35 fps source
+        # re-probed at 36.5). Decimated: the frame count may be one short of ceil(n/k) on sources with an irregular last
+        # timestamp, and the rate may differ by a little; the loader uses the true timestamps either way.
+        lo, hi = sp["nb_frames"] // kdec - 1, math.ceil(sp["nb_frames"] / kdec)
         out = {}
         for r, o in zip(res_names, outs):
             op = ffprobe_stream(ffprobe, o)
-            if op["nb_frames"] not in expect:
-                return {"ok": False, "error": f"frame count {op['nb_frames']} != expected {sorted(expect)} (source {sp['nb_frames']} / {kdec}) at {r}", "src": sp}
-            if abs(op["fps"] - out_fps) > 0.02 * out_fps:
+            if kdec == 1 and op["nb_frames"] != sp["nb_frames"]:
+                return {"ok": False, "error": f"frame count {op['nb_frames']} != source {sp['nb_frames']} at {r}", "src": sp}
+            if kdec > 1 and not (lo <= op["nb_frames"] <= hi):
+                return {"ok": False, "error": f"frame count {op['nb_frames']} not in [{lo}, {hi}] (source {sp['nb_frames']} / {kdec}) at {r}", "src": sp}
+            if kdec > 1 and abs(op["fps"] - out_fps) > 0.02 * out_fps:
                 return {"ok": False, "error": f"stored fps {op['fps']:.3f} != expected {out_fps:.3f} at {r}", "src": sp}
             out[r] = {"bytes": o.read_bytes(), "probe": op}
         return {"ok": True, "src": sp, "k": kdec, "out": out}
@@ -216,11 +221,11 @@ def group_eligible(lay: Layout, gid: int):
     return clips, ann, clips.index[clips["annot_ok"]].intersection(ann.index)
 
 
-def missing_clips(lay: Layout, gid: int, res: str, fps: int | None) -> set[str]:
-    """Eligible clips of a finished group that are in neither its main shard nor its patch shard."""
+def missing_clips(lay: Layout, gid: int, res: str, fps: int | None, include_patch: bool = True) -> set[str]:
+    """Eligible clips of a finished group that are in neither its main shard nor (if include_patch) its patch shard."""
     _c, _a, eligible = group_eligible(lay, gid)
     have: set[str] = set()
-    for tag in ("", "_patch"):
+    for tag in ("", "_patch") if include_patch else ("",):
         rp = shard_path(lay, res, gid, fps, tag) / "records.parquet"
         if rp.exists():
             have |= set(pd.read_parquet(rp, columns=["clip_id"])["clip_id"])
@@ -301,7 +306,7 @@ def patch_pending(lay: Layout, res: str, fps: int | None, n_groups: int = 74) ->
             missing_groups.append(gid); continue
         st = lay.shard_axis_dir(res, fps) / "stats" / f"{GROUP_FMT.format(gid=gid)}.stats.json"
         failed = json.loads(st.read_text()).get("failed", 0) if st.exists() else 0
-        if failed and not (shard_path(lay, res, gid, fps, "_patch") / "_shard_manifest.json").exists():
+        if failed and missing_clips(lay, gid, res, fps):       # covered = every eligible clip is in the main or the patch shard
             uncovered.append(gid)
     return missing_groups, uncovered
 
@@ -313,10 +318,20 @@ def retry_failed(lay: Layout, res_names: list[str], workers: int, ffmpeg: str, f
     while True:
         missing_groups, uncovered = patch_pending(lay, res0, fps)
         for gid in uncovered:
-            want = missing_clips(lay, gid, res0, fps)
+            gname = GROUP_FMT.format(gid=gid)
+            patch_manifest = shard_path(lay, res0, gid, fps, "_patch") / "_shard_manifest.json"
+            if patch_manifest.exists():
+                # a previous patch left clips out: rebuild the whole patch shard (main-shard misses), unless another host holds it
+                if claim and not claim_group(lay, gid, res0, fps, "_repatch"):
+                    continue
+                for r in res_names:
+                    shutil.rmtree(shard_path(lay, r, gid, fps, "_patch"), ignore_errors=True)
+                (lay.shard_axis_dir(res0, fps) / f"{gname}_patch.claim").unlink(missing_ok=True)
+                (lay.shard_axis_dir(res0, fps) / f"{gname}_repatch.claim").unlink(missing_ok=True)
+            want = missing_clips(lay, gid, res0, fps, include_patch=False)
             if not want:
                 continue
-            print(f"[{GROUP_FMT.format(gid=gid)}_patch] {len(want)} clips to re-encode", flush=True)
+            print(f"[{gname}_patch] {len(want)} clips to re-encode", flush=True)
             encode_group(lay, gid, res_names, workers, None, ffmpeg, ffprobe, tmp_root, fps=fps, claim=claim, only=want, tag="_patch")
         missing_groups, uncovered = patch_pending(lay, res0, fps)
         if not missing_groups and not uncovered:
