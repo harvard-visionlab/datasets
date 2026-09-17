@@ -24,15 +24,15 @@ CONTAINER = "jupyter-grez72"
 REPO = "~/work/GitHub/datasets"
 REPO_URL = "git@github.com:harvard-visionlab/datasets.git"
 DATASETS_REL = "DataSets/VideoDatasets"
-# host -> QNAP Flash root inside the container
+# host -> (QNAP Flash root inside the container, local scratch for per-clip temp files)
+FLEET_FLASH = "~/work/DataRemote/qnap/exactitude/Flash"
 HOSTS = {
-    "machina": "~/work/DataExactitudeFlash",
-    "thrace": "~/work/DataRemote/qnap/exactitude/Flash",
-    "vesper": "~/work/DataRemote/qnap/exactitude/Flash",
-    "leeloo": "~/work/DataRemote/qnap/exactitude/Flash",
-    "stelline": "~/work/DataRemote/qnap/exactitude/Flash",
+    "machina": ("~/work/DataExactitudeFlash", "~/work/DataLocal/tmp/spatialvid"),
+    "thrace": (FLEET_FLASH, "/tmp/spatialvid"),      # DataLocal is read-only for jovyan on the fleet hosts; /tmp is the 3.6 TB overlay
+    "vesper": (FLEET_FLASH, "/tmp/spatialvid"),
+    "leeloo": (FLEET_FLASH, "/tmp/spatialvid"),
+    "stelline": (FLEET_FLASH, "/tmp/spatialvid"),
 }
-TMP = "~/work/DataLocal/tmp/spatialvid"
 
 
 def ssh(host: str, script: str, detach: bool = False, timeout: int = 600) -> subprocess.CompletedProcess:
@@ -41,7 +41,7 @@ def ssh(host: str, script: str, detach: bool = False, timeout: int = 600) -> sub
 
 
 def paths(host: str) -> tuple[str, str]:
-    root = HOSTS[host]
+    root = HOSTS[host][0]
     return f"{root}/{DATASETS_REL}/SpatialVID-HQ", f"{root}/{DATASETS_REL}/SpatialVID-HQ-slipstream"
 
 
@@ -51,9 +51,9 @@ def axis(res: str, fps: int | None) -> str:
 
 def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, extra: str) -> None:
     for h in hosts:
-        raw, out = paths(h)
+        raw, out = paths(h); tmp = HOSTS[h][1]
         log = f"{out}/logs/encode_{h}_{axis(res, fps)}.log"
-        bootstrap = (f"ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {TMP} {out}/logs && "
+        bootstrap = (f"ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {tmp} {out}/logs && "
                      f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && git pull -q --ff-only && "
                      f"if [ ! -d .venv ]; then uv sync -q --group video; fi && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx265 && git log --oneline -1")
         r = ssh(h, bootstrap, timeout=1800)
@@ -61,7 +61,7 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
             print(f"[{h}] bootstrap FAILED: {(r.stderr or r.stdout).strip()[-400:]}"); continue
         print(f"[{h}] repo at {r.stdout.strip().splitlines()[-1]}")
         cmd = (f"cd {REPO} && FLEET_HOST={h} nohup uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.encode --raw {raw} --out {out} "
-               f"--res {res} --groups all --claim --tmp {TMP}" + (f" --fps {fps}" if fps else "") + (f" --workers {workers}" if workers else "")
+               f"--res {res} --groups all --claim --tmp {tmp}" + (f" --fps {fps}" if fps else "") + (f" --workers {workers}" if workers else "")
                + (f" {extra}" if extra else "") + f" > {log} 2>&1 &")
         r = ssh(h, cmd, detach=True)
         print(f"[{h}] {'launched' if r.returncode == 0 else 'launch FAILED: ' + r.stderr.strip()[-300:]} -> {log}")
