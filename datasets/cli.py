@@ -276,7 +276,7 @@ def registry_entries(cache_base: Path, names: list[str] | None = None) -> list[D
 
 
 def datasets_without_caches() -> list[str]:
-    return [n for n in list_datasets() if not get_config(n).remote_cache]
+    return [n for n in list_datasets() if not (get_config(n).remote_cache or get_config(n).stores)]
 
 
 def check_local(entry: DatasetEntry) -> None:
@@ -612,6 +612,8 @@ def cmd_list(args: argparse.Namespace) -> int:
                 "aliases": aliases,
                 "num_classes": cfg.num_classes,
                 "remote_cache": {f"{s}/{f}": r for (s, f), r in cfg.remote_cache.items()},
+                "stores": {f"{f}/{r}/{fps or 'native'}": remote for (f, r, fps), remote in cfg.stores.items()},
+                "splits": sorted(cfg.splits), "subsets": sorted(cfg.subsets),
             }
         )
     if args.json:
@@ -620,11 +622,15 @@ def cmd_list(args: argparse.Namespace) -> int:
     for r in rows:
         alias = f"  [{', '.join(r['aliases'])}]" if r["aliases"] else ""
         print(f"{r['name']}  ({r['num_classes']} classes){alias}")
-        if not r["remote_cache"]:
+        if not r["remote_cache"] and not r["stores"]:
             print("  (no remote caches registered)")
         for key, remote in r["remote_cache"].items():
             s, f = key.split("/")
             print(f"  {s:<6}{f:<8}{remote}")
+        for key, remote in r["stores"].items():
+            print(f"  store {key:<22}{remote}")
+        if r["splits"] or r["subsets"]:
+            print(f"  splits {r['splits']}  subsets {r['subsets']}  (video dataset: splits/subsets are index sets, load() picks the store)")
     return 0
 
 
