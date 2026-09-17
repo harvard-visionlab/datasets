@@ -1,7 +1,7 @@
 """Run the encode stage on the lab fleet: every host claims groups from the shared QNAP work dir (`encode --claim`).
 
     uv run python -m datasets.prep.spatialvid_hq.fleet launch --fps 30 [--res 640x360,456x256] [--hosts thrace,vesper,...]
-    uv run python -m datasets.prep.spatialvid_hq.fleet sync [--hosts ...]       # rsync this checkout to the hosts (fleet containers cannot git pull)
+    uv run python -m datasets.prep.spatialvid_hq.fleet sync [--hosts ...]       # fallback: copy this checkout into the containers as jovyan (launch normally git-pulls)
     uv run python -m datasets.prep.spatialvid_hq.fleet launch --fps 15 --after-fps 30   # per host: start once its 30 fps encode exits
     uv run python -m datasets.prep.spatialvid_hq.fleet finish --fps-list 30,15   # on machina: merge + S3 sync each axis when its 74 shards exist
     uv run python -m datasets.prep.spatialvid_hq.fleet status --fps 30          # runs status.py on machina
@@ -10,7 +10,9 @@
     uv run python -m datasets.prep.spatialvid_hq.fleet tail [--hosts ...]       # last log lines per host
 
 Runs from any machine with ssh access to the hosts. Each host runs the `jupyter-grez72` container with the repo at
-~/work/GitHub/datasets and the QNAP Flash share mounted (path differs per host, see HOSTS). Per host: `git pull`
+~/work/GitHub/datasets and the QNAP Flash share mounted (path differs per host, see HOSTS). Everything runs as the
+container user `jovyan` (`docker exec -u jovyan`): the fleet hosts use docker userns-remap, so a bare `docker exec`
+is root-in-namespace, which owns nothing (DataLocal, the repo, GitHub keys all belong to jovyan). Per host: `git pull`
 (clone + `uv sync --group video` if missing), then `nohup encode --groups all --claim --fps F --tmp <local NVMe>`
 with the log on the QNAP (`<out>/logs/encode_<host>_<axis>.log`), so `status.py` sees every host. Stopping and
 relaunching is safe: finished groups are skipped, a group claimed by a killed host stays claimed until its
@@ -24,22 +26,25 @@ import subprocess
 import sys
 
 CONTAINER = "jupyter-grez72"
+CONTAINER_USER = "jovyan"
 REPO = "~/work/GitHub/datasets"
-REPO_URL = "https://github.com/harvard-visionlab/datasets.git"   # public; fleet containers have no GitHub ssh key
+REPO_URL = "git@github.com:harvard-visionlab/datasets.git"
 DATASETS_REL = "DataSets/VideoDatasets"
-# host -> (QNAP Flash root inside the container, local scratch for per-clip temp files)
+# host -> (QNAP Flash root inside the container, local scratch for per-clip temp files). machina is the older
+# machine with its own mount layout; the fleet hosts share one.
 FLEET_FLASH = "~/work/DataRemote/qnap/exactitude/Flash"
+SCRATCH = "~/work/DataLocal/tmp/spatialvid"
 HOSTS = {
-    "machina": ("~/work/DataExactitudeFlash", "~/work/DataLocal/tmp/spatialvid"),
-    "thrace": (FLEET_FLASH, "/tmp/spatialvid"),      # DataLocal is read-only for jovyan on the fleet hosts; /tmp is the 3.6 TB overlay
-    "vesper": (FLEET_FLASH, "/tmp/spatialvid"),
-    "leeloo": (FLEET_FLASH, "/tmp/spatialvid"),
-    "stelline": (FLEET_FLASH, "/tmp/spatialvid"),
+    "machina": ("~/work/DataExactitudeFlash", SCRATCH),
+    "thrace": (FLEET_FLASH, SCRATCH),
+    "vesper": (FLEET_FLASH, SCRATCH),
+    "leeloo": (FLEET_FLASH, SCRATCH),
+    "stelline": (FLEET_FLASH, SCRATCH),
 }
 
 
 def ssh(host: str, script: str, detach: bool = False, timeout: int = 600) -> subprocess.CompletedProcess:
-    inner = f"docker exec {'-d ' if detach else ''}{CONTAINER} bash -lc {shlex.quote(script)}"
+    inner = f"docker exec {'-d ' if detach else ''}-u {CONTAINER_USER} {CONTAINER} bash -lc {shlex.quote(script)}"
     return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, inner], capture_output=True, text=True, timeout=timeout)
 
 
@@ -57,9 +62,9 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
     for h in hosts:
         raw, out = paths(h); tmp = HOSTS[h][1]
         log = f"{out}/logs/encode_{h}_{axis(res, fps)}.log"
-        # pull is best-effort (containers may lack the nbstripout filter); `fleet sync` rsyncs this tree over when pull cannot work
+        # pull is best-effort (a missing nbstripout filter makes git refuse to touch notebooks); `fleet sync` rsyncs this tree as a fallback
         bootstrap = (f"ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {tmp} {out}/logs && "
-                     f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && (git pull -q --ff-only {REPO_URL} main 2>/dev/null || echo 'pull failed; using the tree as is') && "
+                     f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && (git pull -q --ff-only 2>/dev/null || echo 'pull failed; using the tree as is') && "
                      f"if [ ! -d .venv ]; then uv sync -q --group video; fi && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx265 && git log --oneline -1")
         r = ssh(h, bootstrap, timeout=1800)
         if r.returncode:
@@ -85,13 +90,16 @@ def finish(fps_list: str, res: str) -> None:
 
 
 def sync(hosts: list[str]) -> None:
-    """rsync this checkout (minus .venv) to <host>:GitHub/datasets, which the container sees as ~/work/GitHub/datasets."""
+    """Fallback when `git pull` cannot run in the container: rsync this checkout (minus .venv) into the container as jovyan
+    (`docker exec -i -u jovyan ... tar x`), so ownership stays with the container user. Prefer `git pull` (launch does it)."""
     import os
     src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    tar = ["tar", "-C", src, "--exclude", ".venv", "--exclude", "__pycache__", "--exclude", "*.egg-info", "--exclude", ".pytest_cache", "-cf", "-", "."]
     for h in hosts:
-        r = subprocess.run(["rsync", "-a", "--delete", "--exclude", ".venv", "--exclude", "__pycache__", "--exclude", "*.egg-info", "--exclude", ".pytest_cache",
-                            src + "/", f"{h}:GitHub/datasets/"], capture_output=True, text=True)
-        print(f"[{h}] rsync {'ok' if r.returncode in (0, 23) else 'FAILED: ' + r.stderr[-300:]}")   # 23 = could not set times on the bind mount
+        untar = f"docker exec -i -u {CONTAINER_USER} {CONTAINER} bash -lc {shlex.quote(f'mkdir -p {REPO} && tar -C {REPO} -xf -')}"
+        p1 = subprocess.Popen(tar, stdout=subprocess.PIPE)
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", h, untar], stdin=p1.stdout, capture_output=True, text=True); p1.wait()
+        print(f"[{h}] sync {'ok' if r.returncode == 0 else 'FAILED: ' + r.stderr[-300:]}")
 
 
 def ps(hosts: list[str]) -> None:
