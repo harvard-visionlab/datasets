@@ -32,6 +32,7 @@ QNAP_ROOTS = (
     "/mnt/QNAP/exactitude/Flash/DataSets/VideoDatasets",              # hosts
 )
 ROOT_ENV = "VISIONLAB_DATASETS_ROOT"
+_WARNED: set[str] = set()
 
 
 # ----------------------------------------------------------------------------- store selection
@@ -283,7 +284,9 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
         store_dir = resolve_store(config.stores[k], tree, cache_base, download=download)
         if store_dir is not None:
             key = k; break
-        warnings.warn(f"{config.name}: store {store_name(config.stores[k])} is registered but not built/synced yet; trying the next one")
+        if store_name(config.stores[k]) not in _WARNED:      # once per process per store
+            _WARNED.add(store_name(config.stores[k]))
+            warnings.warn(f"{config.name}: store {store_name(config.stores[k])} is registered but not built/synced yet; trying the next one", stacklevel=3)
     if store_dir is None:
         raise FileNotFoundError(f"{config.name}: no usable store for fmt={fmt} res={res} rate_hz={rate_hz} fps={fps}")
     cache = OptimizedCache.load(store_dir, verbose=False)

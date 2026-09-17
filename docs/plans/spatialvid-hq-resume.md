@@ -28,6 +28,8 @@ Read this first, then `spatialvid-hq-subsets-and-loader.md` (design + all measur
 ## Findings to remember (details and tables in the design doc)
 
 - 5 Hz is too slow, 10 Hz threshold, 15 Hz good → video store canonical; rate is a loader parameter; poses interpolated to the true frame times.
+- torchcodec `get_frames_played_at(t)` returns the frame *playing at* t (pts ≤ t < pts + dur, i.e. floor, not nearest); harmless because the true pts come back and poses use them (demo: t0 2.866 → first frame pts 2.833 at 30 fps).
+- Demo 2026-09-17 (`/tmp/demo_e2e.py`, machina while encoding, 8 workers): `load` 3.7 s from the local-SSD store; val 15,029 clips → 10,210 anchors ≥ 8 s; `[8,120,3,224,398]` uint8 batches with `video_t_sec`, `video_rec`; `poses_at` → `[8,120,7]`; seed-reproducible across loaders; `channel_cap=0.05` on train-walk → 134,312 clips, top channel 6.1 %.
 - x265 CRF depends on the stream frame rate (same CRF at 30 fps spends ~2× bytes per frame vs 60 fps); the fps store bytes are ~80 % of the native store, not 50 %.
 - `torch.set_num_threads(1)` / `OMP_NUM_THREADS=1` in every process that hosts `DecodeVideoWindow` (DDP rule).
 - CIFS page cache is per open-file holder: `warmup_cache()` per process start or stage the store to node-local disk.
