@@ -123,11 +123,29 @@ store; poses come from the clip's annotation arrays, interpolated to the returne
 
 ## 5. Splits before any training run
 
-v1 cannot be used (3.1 % val, no big walking channel in val). Split **v2**: unit = source video, stratify on
-carrier × scene × time of day × weather × motion, **and hold out whole channels** for a leave-channel-out val
-(the honest test for "generalizes to rain / night", see next-steps §3). Raise or drop the `--max-source-clips`
-val-eligibility cap for walk. Report within-subset balance (walk_v0 val fraction, per-dim tables, channel
-concentration per stratum). Then `train` = subset ∩ v2-train etc.
+v1 cannot be used (3.1 % val, no big walking channel in val). `make_splits.py` v2 (2026-09-16): stratifies on
+`carrier` too, computes targets and the report on the subset population, and can hold out **whole channels**.
+Candidates generated on person_carried_v0, val target 21k clips (9.9 %), dims scene × time-of-day × weather × crowd
+× motion × carrier, video cap 200 clips (so long walking videos are val-eligible):
+
+| candidate | val unit | channel-holdout clips | max \|val − train\| | worst dimension | new-channel test |
+| --- | --- | ---: | ---: | --- | --- |
+| v2a-source | whole videos | 0 | 1.3 pp | Rural 8.8 / 7.5 | none (70 of 71 val channels also in train) |
+| v2b-channel | whole channels (deficit-greedy) | 25,869 (12 %) | 17 pp | Interior 19 / 36; rig 11 / 17 | 5 channels |
+| v2d/v2e-hybrid | deficit-greedy channels + videos | 10–13k | 16–18 pp | Interior; rig 11 / 20 | 4 channels (house-tour rigs) |
+| **v2f-hybrid** | 3 *typical* channels (6,004 clips) + videos | 6,004 | **4.8 pp** | Interior 21.3 / 16.6; walk 87.8 / 91.1 | 3 channels: 4K Nature and City Walks, The Flying Dutchman, Drifted Films |
+| v2g-hybrid | 5 typical channels (11,350) + videos | 11,350 | 12 pp | Urban 54 / 66 | 5 channels |
+
+Lesson: with 82 heavy-tailed channels, whole-channel holdout cannot be balanced by cell-deficit greedy (the
+under-filled cells are exactly the atypical channels: house-tour rigs, Interior). "Typical" selection (channels whose
+strata mix is closest to the population, L1 over cells, ≤ 1.5 % of clips each) keeps the deviation under 5 pp at a
+6k core. Rain: v2a val rain is 85 % Rain Everyday like train; v2f 66 %; v2g 49 % but at 12 pp imbalance.
+
+**Recommendation:** adopt **v2f** as `splits/v2.parquet`: 21,012 val clips = 6,004 from 3 held-out channels
+(`val_kind = channel`, the new-channel metric, reported separately) + 15,008 from held-out videos of the other
+channels (`val_kind = video`, the in-distribution metric, balanced). Train = 192,091 clips of the subset. Clips
+outside the subset follow their video / channel. **decide**: adopt v2f, or trade balance for a larger new-channel
+set (v2g).
 
 ## 6. slipstream (status 2026-09-16 evening)
 
@@ -145,7 +163,7 @@ inside the prefetch thread; NVDEC with 8 persistent decoders per GPU on both GPU
    `channels.parquet` + `clips.parquet`, so the definition is code).
 2. Stage throughput to ≥ 100 windows/s (slipstream2), measured with `benchmarks/bench_video_window.py` on machina;
    fallback: 30 fps re-encode of the subset.
-3. Split v2 (§5) and its report.
+3. Split v2: candidates generated (§5); adopt one → `splits/v2.parquet`, sync to S3.
 4. Registry: `res` axis, video config shape (`stores`, `splits`, `subsets`), `load()` returning `ds.clips`,
    `window_sampler`, `poses_at`; `where` / `channel_cap`; pin slipstream ≥ 0.7.0 once merged.
 5. Demo notebook: `[B,120,3,224,224]` batch at 15 Hz with trajectories, seed-reproducible, throughput measured.
