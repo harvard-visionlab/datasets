@@ -15,6 +15,10 @@ the native fps. Requires stage 1 output (index/). Idempotent: a group with a fin
 resolution is skipped, so the full run can be stopped and resumed; a partially written group is redone from scratch.
 `--claim`: several hosts share one <work dir> (QNAP) and each atomically claims a group before encoding it
 (shards/<axis>/group_XXXX.claim, O_EXCL), so `--groups all --claim` on every host load-balances the fleet.
+`--retry-failed`: patch pass. For every finished group whose shard misses eligible clips (encode failures), stream that
+group's tar again and encode only the missing clips into `group_XXXX_patch/` shards (claimed per group like the main
+pass); loops until all groups have a shard and every failure is covered, so it can run alongside the main pass.
+`merge` picks up the patch shards; `finish` refuses to merge while patches are pending.
 """
 from __future__ import annotations
 
@@ -184,11 +188,11 @@ def build_sample(res: str, cid: str, clip: pd.Series, ann: pd.Series, result: di
     return s
 
 
-def claim_group(lay: Layout, gid: int, res: str, fps: int | None) -> bool:
+def claim_group(lay: Layout, gid: int, res: str, fps: int | None, tag: str = "") -> bool:
     """Atomically claim a group for this host (O_EXCL on the shared work dir). False if another host holds it."""
     d = lay.shard_axis_dir(res, fps); d.mkdir(parents=True, exist_ok=True)
     try:
-        fd = os.open(d / f"{GROUP_FMT.format(gid=gid)}.claim", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(d / f"{GROUP_FMT.format(gid=gid)}{tag}.claim", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         return False
     os.write(fd, f"{host_name()} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n".encode()); os.close(fd)
@@ -199,19 +203,45 @@ def host_name() -> str:
     return os.environ.get("FLEET_HOST") or socket.gethostname()
 
 
-def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limit: int | None, ffmpeg: str, ffprobe: str,
-                 tmp_root: str, fps: int | None = None, claim: bool = False, log_every: int = 100) -> dict:
+def shard_path(lay: Layout, res: str, gid: int, fps: int | None, tag: str = "") -> Path:
+    d = lay.shard_dir(res, gid, fps)
+    return d.with_name(d.name + tag) if tag else d
+
+
+def group_eligible(lay: Layout, gid: int):
+    """(clips of the group indexed by clip_id, annotations indexed by clip_id, eligible clip index)."""
     gname = GROUP_FMT.format(gid=gid)
-    done = all((lay.shard_dir(r, gid, fps) / "_shard_manifest.json").exists() for r in res_names)
-    if done:
-        print(f"[{gname}] shards exist for {[axis_name(r, fps) for r in res_names]}, skipping"); return {"group": gid, "skipped": True}
-    if claim and not claim_group(lay, gid, res_names[0], fps):
-        print(f"[{gname}] claimed by another host, skipping"); return {"group": gid, "skipped": True}
     clips = pd.read_parquet(lay.index_dir / "clips.parquet"); clips = clips[clips.group_id == gid].set_index("clip_id")
     ann = pd.read_parquet(lay.index_dir / "annotations" / f"{gname}.parquet").set_index("clip_id")
-    eligible = clips.index[clips["annot_ok"]].intersection(ann.index)
+    return clips, ann, clips.index[clips["annot_ok"]].intersection(ann.index)
+
+
+def missing_clips(lay: Layout, gid: int, res: str, fps: int | None) -> set[str]:
+    """Eligible clips of a finished group that are in neither its main shard nor its patch shard."""
+    _c, _a, eligible = group_eligible(lay, gid)
+    have: set[str] = set()
+    for tag in ("", "_patch"):
+        rp = shard_path(lay, res, gid, fps, tag) / "records.parquet"
+        if rp.exists():
+            have |= set(pd.read_parquet(rp, columns=["clip_id"])["clip_id"])
+    return set(eligible) - have
+
+
+def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limit: int | None, ffmpeg: str, ffprobe: str,
+                 tmp_root: str, fps: int | None = None, claim: bool = False, log_every: int = 100,
+                 only: set[str] | None = None, tag: str = "") -> dict:
+    """Encode one group (or, with `only`, just those clip ids into a `<group><tag>` shard)."""
+    gname = GROUP_FMT.format(gid=gid) + tag
+    done = all((shard_path(lay, r, gid, fps, tag) / "_shard_manifest.json").exists() for r in res_names)
+    if done:
+        print(f"[{gname}] shards exist for {[axis_name(r, fps) for r in res_names]}, skipping"); return {"group": gid, "skipped": True}
+    if claim and not claim_group(lay, gid, res_names[0], fps, tag):
+        print(f"[{gname}] claimed by another host, skipping"); return {"group": gid, "skipped": True}
+    clips, ann, eligible = group_eligible(lay, gid)
+    if only is not None:
+        eligible = eligible.intersection(sorted(only)); log_every = 1
     cap = min(len(eligible), limit) if limit else len(eligible)
-    writers = {r: ShardWriter(lay.shard_dir(r, gid, fps), FIELD_TYPES, cap) for r in res_names}
+    writers = {r: ShardWriter(shard_path(lay, r, gid, fps, tag), FIELD_TYPES, cap) for r in res_names}
     stats = dict(group=gid, fps=fps, host=host_name(), eligible=int(len(eligible)), submitted=0, written=0, failed=0, not_in_index=0,
                  bytes={r: 0 for r in res_names}, src_bytes=0, decimation=Counter())
     t0 = time.time(); errors: list[dict] = []
@@ -236,6 +266,8 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
     with ProcessPoolExecutor(workers) as ex:
         for name, data in iter_tar_members(lay.video_tar(gid), suffixes=(".mp4",)):
             cid = Path(name).stem
+            if only is not None and cid not in only:
+                continue
             if cid not in clips.index or cid not in ann.index or not clips.loc[cid, "annot_ok"]:
                 stats["not_in_index"] += 1; continue
             if limit and stats["submitted"] >= limit:
@@ -244,11 +276,15 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
                 drain(block=False); time.sleep(0.01) if len(pending) >= window else None
             pending.append((ex.submit(encode_clip, (cid, data, tuple(res_names), fps, ffmpeg, ffprobe, tmp_root)), cid))
             stats["submitted"] += 1; stats["src_bytes"] += len(data)
+            if only is not None and stats["submitted"] >= len(only):
+                break                                  # patch pass: every wanted clip seen, stop streaming the tar
         drain(block=True)
-    extra = dict(group=gname, encode=dict(codec="libx265", crf=X265_CRF, preset=X265_PRESET, gop_seconds=GOP_SECONDS, fps=fps), errors=errors)
+    extra = dict(group=gname, encode=dict(codec="libx265", crf=X265_CRF, preset=X265_PRESET, gop_seconds=GOP_SECONDS, fps=fps), errors=errors, patch=bool(tag))
     for r in res_names:
         writers[r].finalize(extra={**extra, "res": r})
-    stats["seconds"] = round(time.time() - t0, 1); stats["errors"] = errors[:20]; stats["decimation"] = dict(stats["decimation"])
+    stats["seconds"] = round(time.time() - t0, 1); stats["errors"] = errors[:50]; stats["decimation"] = dict(stats["decimation"])
+    if only is not None:
+        stats["wanted"] = sorted(only); stats["not_in_tar"] = sorted(set(only) - {r["clip_id"] for w in writers.values() for r in w.records} - {e["clip_id"] for e in errors})
     print(f"[{gname}] done: {stats['written']} written, {stats['failed']} failed, {stats['not_in_index']} skipped (not in index / no annotations), "
           f"{stats['seconds']} s; size vs source: " + ", ".join(f"{r} {stats['bytes'][r] / max(stats['src_bytes'], 1) * 100:.1f}%" for r in res_names)
           + (f"; decimation {stats['decimation']}" if fps else ""), flush=True)
@@ -257,12 +293,45 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
     return stats
 
 
+def patch_pending(lay: Layout, res: str, fps: int | None, n_groups: int = 74) -> tuple[list[int], list[int]]:
+    """(groups without a main shard yet, finished groups whose failures are not yet covered by a finished patch shard)."""
+    missing_groups, uncovered = [], []
+    for gid in range(1, n_groups + 1):
+        if not (shard_path(lay, res, gid, fps) / "_shard_manifest.json").exists():
+            missing_groups.append(gid); continue
+        st = lay.shard_axis_dir(res, fps) / "stats" / f"{GROUP_FMT.format(gid=gid)}.stats.json"
+        failed = json.loads(st.read_text()).get("failed", 0) if st.exists() else 0
+        if failed and not (shard_path(lay, res, gid, fps, "_patch") / "_shard_manifest.json").exists():
+            uncovered.append(gid)
+    return missing_groups, uncovered
+
+
+def retry_failed(lay: Layout, res_names: list[str], workers: int, ffmpeg: str, ffprobe: str, tmp_root: str, fps: int | None,
+                 claim: bool, poll: int = 120) -> None:
+    """Patch pass: loop until every group has a shard and every failure is covered by a `_patch` shard."""
+    res0 = res_names[0]
+    while True:
+        missing_groups, uncovered = patch_pending(lay, res0, fps)
+        for gid in uncovered:
+            want = missing_clips(lay, gid, res0, fps)
+            if not want:
+                continue
+            print(f"[{GROUP_FMT.format(gid=gid)}_patch] {len(want)} clips to re-encode", flush=True)
+            encode_group(lay, gid, res_names, workers, None, ffmpeg, ffprobe, tmp_root, fps=fps, claim=claim, only=want, tag="_patch")
+        missing_groups, uncovered = patch_pending(lay, res0, fps)
+        if not missing_groups and not uncovered:
+            print("RETRY-EXIT every group has a shard and every failure is covered", flush=True); return
+        print(f"[retry] waiting: {len(missing_groups)} groups still encoding, {len(uncovered)} patch shards pending ({uncovered[:8]}); sleep {poll}s", flush=True)
+        time.sleep(poll)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--raw", required=True, type=Path); ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--res", default=",".join(RES)); ap.add_argument("--groups", default="all")
     ap.add_argument("--fps", type=int, default=None, help="build the <fps>-fps stores (integer decimation per clip); default: native fps")
     ap.add_argument("--claim", action="store_true", help="fleet mode: atomically claim each group on the shared work dir before encoding")
+    ap.add_argument("--retry-failed", action="store_true", help="patch pass: re-encode the clips missing from finished shards into group_XXXX_patch shards (loops until complete)")
     ap.add_argument("--limit", type=int, default=None, help="max clips per group (test runs)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) // FFMPEG_THREADS))
     ap.add_argument("--ffmpeg", default=None, help="ffmpeg binary or a bin/ directory (default: PATH or $SPATIALVID_FFMPEG)")
@@ -278,6 +347,8 @@ def main(argv=None) -> int:
     print(f"encode {len(groups)} groups -> {[axis_name(r, a.fps) for r in res_names]}, {a.workers} workers x {FFMPEG_THREADS} ffmpeg threads, "
           f"ffmpeg={ffmpeg}, host={host_name()}", flush=True)
     lay.shards_dir.mkdir(parents=True, exist_ok=True)
+    if a.retry_failed:
+        retry_failed(lay, res_names, a.workers, ffmpeg, ffprobe, a.tmp or tempfile.gettempdir(), a.fps, a.claim); return 0
     for gid in groups:
         encode_group(lay, gid, res_names, a.workers, a.limit, ffmpeg, ffprobe, a.tmp or tempfile.gettempdir(), fps=a.fps, claim=a.claim)
     print("ENCODE-EXIT all requested groups done", flush=True)

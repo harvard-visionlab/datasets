@@ -22,7 +22,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     lay = Layout(Path("/nonexistent"), a.out); res_names = [resolve_res(r) for r in a.res.split(",")]
     ax0 = lay.shard_axis_dir(res_names[0], a.fps)
-    stats_paths = sorted((ax0 / "stats").glob("group_*.stats.json")) if (ax0 / "stats").exists() else sorted(lay.shards_dir.glob("group_*.stats.json"))
+    stats_paths = sorted((ax0 / "stats").glob("group_????.stats.json")) if (ax0 / "stats").exists() else sorted(lay.shards_dir.glob("group_*.stats.json"))
+    patch_stats = [json.loads(p.read_text()) for p in sorted((ax0 / "stats").glob("group_????_patch.stats.json"))] if (ax0 / "stats").exists() else []
     done = [json.loads(p.read_text()) for p in stats_paths]
     n_written = sum(d.get("written", 0) for d in done); src = sum(d.get("src_bytes", 0) for d in done)
     secs = sum(d.get("seconds", 0) for d in done)
@@ -30,12 +31,13 @@ def main(argv=None) -> int:
           f"encode time summed over hosts {secs / 3600:.1f} h")
     for r in res_names:
         d = lay.shard_axis_dir(r, a.fps)
-        shards = [p for p in d.glob("group_*") if (p / "_shard_manifest.json").exists()]
+        shards = [p for p in d.glob("group_????") if (p / "_shard_manifest.json").exists()]
+        patches = [p for p in d.glob("group_????_patch") if (p / "_shard_manifest.json").exists()]
         claims = sorted(p.stem for p in d.glob("group_*.claim"))
-        finished = {p.name for p in shards}
+        finished = {p.name for p in shards + patches}
         in_flight = [c for c in claims if c not in finished]
         out_b = sum(x.get("bytes", {}).get(r, 0) for x in done)
-        print(f"  {axis_name(r, a.fps)}: {len(shards)} shards, {out_b / 1e9:.1f} GB ({out_b / max(src, 1) * 100:.1f}% of source); "
+        print(f"  {axis_name(r, a.fps)}: {len(shards)} shards + {len(patches)} patch shards, {out_b / 1e9:.1f} GB ({out_b / max(src, 1) * 100:.1f}% of source); "
               f"claimed but unfinished: {len(in_flight)} {in_flight[:12]}")
     if a.fps:
         dec = {}
@@ -61,8 +63,10 @@ def main(argv=None) -> int:
         rate = (len(tl) - 1) / span_h if span_h > 0 else float("nan")
         print(f"  fleet rate {rate:.2f} groups/h over the last {span_h:.1f} h -> remaining {N_GROUPS - len(tl)} groups ≈ {(N_GROUPS - len(tl)) / rate:.1f} h")
     failed = sum(d.get("failed", 0) for d in done)
-    if failed:
-        print(f"\nfailed clips so far: {failed} (see shards/<axis>/stats/group_XXXX.stats.json 'errors')")
+    if failed or patch_stats:
+        patched = sum(d.get("written", 0) for d in patch_stats); pfail = sum(d.get("failed", 0) for d in patch_stats)
+        nit = sum(len(d.get("not_in_tar", [])) for d in patch_stats)
+        print(f"\nfailed clips in the main pass: {failed}; patch shards: {len(patch_stats)} groups, {patched} clips re-encoded, {pfail} failed again, {nit} not found in the tar")
     return 0
 
 

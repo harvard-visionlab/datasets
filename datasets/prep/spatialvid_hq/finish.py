@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .common import Layout, axis_name, resolve_res
+from .encode import patch_pending
 from .merge import merge_res
 
 S3_BASE = "s3://visionlab-datasets/slipstream-cache/spatialvid-hq"
@@ -37,10 +38,12 @@ def main(argv=None) -> int:
             if done_marker.exists():
                 pending.discard((res, fps)); continue
             if not (store / "store_manifest.json").exists():
-                n = len([p for p in lay.shard_axis_dir(res, fps).glob("group_*") if (p / "_shard_manifest.json").exists()])
-                if n < a.groups:
+                missing_groups, uncovered = patch_pending(lay, res, fps, a.groups)
+                if missing_groups or uncovered:
+                    if not missing_groups:
+                        log(f"[{ax}] all {a.groups} shards present but {len(uncovered)} groups have uncovered failures {uncovered[:8]} -> waiting for the patch pass")
                     continue
-                log(f"[{ax}] {n} shards complete -> merging")
+                log(f"[{ax}] {a.groups} shards complete, every failure covered -> merging")
                 sm = merge_res(lay, res, delete_shards=False, fps=fps)
                 if not sm or sm.get("num_records", 0) == 0:
                     log(f"[{ax}] merge produced nothing; will retry"); continue
