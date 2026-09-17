@@ -146,13 +146,16 @@ def encode_clip(args: tuple) -> dict:
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.returncode != 0:
             return {"ok": False, "error": f"ffmpeg: {p.stderr.strip()[-300:]}", "src": sp}
-        expect = math.ceil(sp["nb_frames"] / kdec)
+        # ~0.03 % of sources are slightly variable-rate (avg_frame_rate 59.5-59.8, 29.87): their timestamps pass through
+        # unchanged, so allow the last frame to fall off the grid and a 2 % rate difference (30 fps pass 2026-09-17 lost
+        # 116 clips to the exact checks; timestamps, not the nominal rate, are what the loader uses).
+        expect = {math.ceil(sp["nb_frames"] / kdec), sp["nb_frames"] // kdec}
         out = {}
         for r, o in zip(res_names, outs):
             op = ffprobe_stream(ffprobe, o)
-            if op["nb_frames"] != expect:
-                return {"ok": False, "error": f"frame count {op['nb_frames']} != expected {expect} (source {sp['nb_frames']} / {kdec}) at {r}", "src": sp}
-            if abs(op["fps"] - out_fps) > 0.05:
+            if op["nb_frames"] not in expect:
+                return {"ok": False, "error": f"frame count {op['nb_frames']} != expected {sorted(expect)} (source {sp['nb_frames']} / {kdec}) at {r}", "src": sp}
+            if abs(op["fps"] - out_fps) > 0.02 * out_fps:
                 return {"ok": False, "error": f"stored fps {op['fps']:.3f} != expected {out_fps:.3f} at {r}", "src": sp}
             out[r] = {"bytes": o.read_bytes(), "probe": op}
         return {"ok": True, "src": sp, "k": kdec, "out": out}
