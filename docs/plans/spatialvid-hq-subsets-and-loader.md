@@ -81,7 +81,14 @@ Measured 2026-09-16 on machina, 8 s windows at 15 Hz (T = 120), 456x256 store, w
 (~64 at B = 32, 0.5 s/step). Trainer settings: `num_workers = os.cpu_count()`, 1 ffmpeg thread per decoder,
 `reuse_output=True`, `OMP_NUM_THREADS=1` in the loader process (slipstream warns when it is not set). Cold reads
 from the CIFS mount cost ~400 ms per record and serialize, so `warmup_cache(indices=)` before each epoch is mandatory
-(`page_cache_residency()` checks it). (b) A 15 fps re-encode buys ≤ 2× decode and 27 % storage while pinning the
+(`page_cache_residency()` checks it). Measured 2026-09-17: the QNAP mount (`cache=strict`, `actimeo=1`, no lease) keeps a
+file's pages only while some process holds it open; a fresh process starts at residency 0.0 (65 windows/s, ~1k major
+faults per 640 records) even if another process read the same records minutes earlier; within a process epoch 2+ runs
+at 131 windows/s with zero major faults; a concurrent holder process keeps the pages alive for others (DDP ranks on one
+node share). `warmup_cache(touch=True)` adds nothing beyond the read pass. Preferred layout: stage the store to
+node-local disk (the normal `SLIPSTREAM_CACHE_DIR` pattern); a copy of the 456x256 store to machina's local SSD was in
+progress at session end. **Multiple fps stores** (user, 2026-09-17): treat fps as a store axis next to res and sync only
+the stores a job uses; see `spatialvid-hq-resume.md` decision 3. (b) A 15 fps re-encode buys ≤ 2× decode and 27 % storage while pinning the
 rate; only worth it if the tuned stage plus NVDEC still falls short. A 30 fps re-encode keeps 5/10/15/30 Hz exact
 and is the fallback of choice. (c) Realistic requirement: a batch of 32 windows per optimizer step at ~0.5 s/step
 is ~64 windows/s; at T = 120 and full 456x256 that is 5 GB/s of uint8 frames, so the decoder-side `resize=` to

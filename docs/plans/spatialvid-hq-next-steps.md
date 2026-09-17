@@ -1,5 +1,7 @@
 # SpatialVID-HQ: next steps (as of 2026-09-13)
 
+> **Resume here: `spatialvid-hq-resume.md` (2026-09-17)** — current state, open decisions, next items. Design + measurements: `spatialvid-hq-subsets-and-loader.md`.
+
 State: raw HF mirror on QNAP Flash (`.../VideoDatasets/SpatialVID-HQ`, 1.2 TB, verified); derived tree
 `.../VideoDatasets/SpatialVID-HQ-slipstream/` with `index/clips.parquet` (365,362 clips, source ids, annotation
 integrity flags), `splits/v1.parquet` (12,012 val, 66 excluded), and two verified stores
