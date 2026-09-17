@@ -1,6 +1,7 @@
 """Run the encode stage on the lab fleet: every host claims groups from the shared QNAP work dir (`encode --claim`).
 
     uv run python -m datasets.prep.spatialvid_hq.fleet launch --fps 30 [--res 640x360,456x256] [--hosts thrace,vesper,...]
+    uv run python -m datasets.prep.spatialvid_hq.fleet sync [--hosts ...]       # rsync this checkout to the hosts (fleet containers cannot git pull)
     uv run python -m datasets.prep.spatialvid_hq.fleet status --fps 30          # runs status.py on machina
     uv run python -m datasets.prep.spatialvid_hq.fleet ps                       # encode processes per host
     uv run python -m datasets.prep.spatialvid_hq.fleet stop [--hosts ...]       # kill encode on hosts (claims of unfinished groups must be removed by hand)
@@ -22,7 +23,7 @@ import sys
 
 CONTAINER = "jupyter-grez72"
 REPO = "~/work/GitHub/datasets"
-REPO_URL = "git@github.com:harvard-visionlab/datasets.git"
+REPO_URL = "https://github.com/harvard-visionlab/datasets.git"   # public; fleet containers have no GitHub ssh key
 DATASETS_REL = "DataSets/VideoDatasets"
 # host -> (QNAP Flash root inside the container, local scratch for per-clip temp files)
 FLEET_FLASH = "~/work/DataRemote/qnap/exactitude/Flash"
@@ -53,8 +54,9 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
     for h in hosts:
         raw, out = paths(h); tmp = HOSTS[h][1]
         log = f"{out}/logs/encode_{h}_{axis(res, fps)}.log"
-        bootstrap = (f"export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new'; ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {tmp} {out}/logs && "
-                     f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && git pull -q --ff-only && "
+        # pull is best-effort (containers may lack the nbstripout filter); `fleet sync` rsyncs this tree over when pull cannot work
+        bootstrap = (f"ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {tmp} {out}/logs && "
+                     f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && (git pull -q --ff-only {REPO_URL} main 2>/dev/null || echo 'pull failed; using the tree as is') && "
                      f"if [ ! -d .venv ]; then uv sync -q --group video; fi && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx265 && git log --oneline -1")
         r = ssh(h, bootstrap, timeout=1800)
         if r.returncode:
@@ -65,6 +67,16 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
                + (f" {extra}" if extra else "") + f" > {log} 2>&1 &")
         r = ssh(h, cmd, detach=True)
         print(f"[{h}] {'launched' if r.returncode == 0 else 'launch FAILED: ' + r.stderr.strip()[-300:]} -> {log}")
+
+
+def sync(hosts: list[str]) -> None:
+    """rsync this checkout (minus .venv) to <host>:GitHub/datasets, which the container sees as ~/work/GitHub/datasets."""
+    import os
+    src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    for h in hosts:
+        r = subprocess.run(["rsync", "-a", "--delete", "--exclude", ".venv", "--exclude", "__pycache__", "--exclude", "*.egg-info", "--exclude", ".pytest_cache",
+                            src + "/", f"{h}:GitHub/datasets/"], capture_output=True, text=True)
+        print(f"[{h}] rsync {'ok' if r.returncode in (0, 23) else 'FAILED: ' + r.stderr[-300:]}")   # 23 = could not set times on the bind mount
 
 
 def ps(hosts: list[str]) -> None:
@@ -94,7 +106,7 @@ def status(fps: int | None, res: str) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["launch", "status", "ps", "stop", "tail"])
+    ap.add_argument("cmd", choices=["launch", "sync", "status", "ps", "stop", "tail"])
     ap.add_argument("--hosts", default=",".join(HOSTS)); ap.add_argument("--fps", type=int, default=None)
     ap.add_argument("--res", default="640x360,456x256"); ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--extra", default="", help="extra args passed to encode (e.g. '--limit 5')"); ap.add_argument("-n", type=int, default=5)
@@ -104,6 +116,7 @@ def main(argv=None) -> int:
     if unknown:
         print(f"unknown hosts {unknown}; known {list(HOSTS)}", file=sys.stderr); return 2
     if a.cmd == "launch": launch(hosts, a.fps, a.res, a.workers, a.extra)
+    elif a.cmd == "sync": sync(hosts)
     elif a.cmd == "ps": ps(hosts)
     elif a.cmd == "stop": stop(hosts)
     elif a.cmd == "tail": tail(hosts, a.fps, a.res, a.n)
