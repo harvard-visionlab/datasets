@@ -7,31 +7,37 @@ slipstream-compatible shard per resolution: shards/<res>/group_XXXX/{<field>.bin
 _shard_manifest.json, records.parquet}. Stage 4 (merge) concatenates the shards into one store per resolution.
 
     uv run python -m datasets.prep.spatialvid_hq.encode --raw <hf mirror> --out <work dir> \
-        [--res 640x360,456x256] [--groups 1-74] [--limit N] [--workers 16] [--ffmpeg <bin or conda env bin dir>]
+        [--res 640x360,456x256] [--fps 30] [--groups 1-74] [--limit N] [--workers 16] [--ffmpeg <bin or conda env bin dir>] [--claim]
 
-Requires stage 1 output (index/). Idempotent: a group with a finished shard for every requested resolution is
-skipped, so the full run can be stopped and resumed; a partially written group is redone from scratch.
+`--fps F` builds the F-fps stores (shards/<res>-<F>fps/): every clip is decimated by an integer factor with the
+ffmpeg `fps` filter (see common.decimation_factor; frame count asserted = ceil(n / k)); without it the stores keep
+the native fps. Requires stage 1 output (index/). Idempotent: a group with a finished shard for every requested
+resolution is skipped, so the full run can be stopped and resumed; a partially written group is redone from scratch.
+`--claim`: several hosts share one <work dir> (QNAP) and each atomically claims a group before encoding it
+(shards/<axis>/group_XXXX.claim, O_EXCL), so `--groups all --claim` on every host load-balances the fleet.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
-from collections import deque
+from collections import Counter, deque
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from .common import (FFMPEG_THREADS, FIELD_TYPES, GOP_SECONDS, GROUP_FMT, RES, X265_CRF, X265_PRESET, Layout,
-                     ffprobe_stream, find_ffmpeg, iter_tar_members, npy_bytes, parse_groups, resolve_res)
+from .common import (FFMPEG_THREADS, FIELD_TYPES, GOP_SECONDS, GROUP_FMT, RES, X265_CRF, X265_PRESET, Layout, axis_name,
+                     decimation_factor, ffprobe_stream, find_ffmpeg, iter_tar_members, npy_bytes, parse_groups, resolve_res)
 
 # ----------------------------------------------------------------------------- shard writer (slipstream layout)
 
@@ -110,8 +116,9 @@ def vsync_passthrough(ffmpeg: str) -> list[str]:
 
 
 def encode_clip(args: tuple) -> dict:
-    """Decode once, encode to every resolution. Returns {'ok', 'src': probe, 'out': {res: {'bytes','probe'}}, 'error'}."""
-    clip_id, src_bytes, res_names, ffmpeg, ffprobe, tmp_root = args
+    """Decode once, (optionally) decimate to `fps`, encode to every resolution.
+    Returns {'ok', 'src': probe, 'k': decimation, 'out': {res: {'bytes','probe'}}, 'error'}."""
+    clip_id, src_bytes, res_names, fps, ffmpeg, ffprobe, tmp_root = args
     res_names = list(res_names)
     with tempfile.TemporaryDirectory(dir=tmp_root) as td:
         src = Path(td) / "src.mp4"; src.write_bytes(src_bytes)
@@ -119,27 +126,34 @@ def encode_clip(args: tuple) -> dict:
             sp = ffprobe_stream(ffprobe, src)
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": f"probe: {e}"}
-        k = max(1, int(round(sp["fps"] * GOP_SECONDS)))
+        kdec = decimation_factor(sp["fps"], fps)
+        out_fps = sp["fps"] / kdec; num, den = sp["fps_frac"]
+        gop = max(1, int(round(out_fps * GOP_SECONDS)))
         n = len(res_names)
-        fc = f"[0:v]split={n}" + "".join(f"[s{i}]" for i in range(n)) + ";" + ";".join(
+        # decimate once (exact rational rate, so the x265 rate control sees the true stored fps), then split per res
+        pre = f"fps={num}/{den * kdec}," if kdec > 1 else ""
+        fc = f"[0:v]{pre}split={n}" + "".join(f"[s{i}]" for i in range(n)) + ";" + ";".join(
             f"[s{i}]scale={RES[r][0]}:{RES[r][1]}:flags=lanczos[o{i}]" for i, r in enumerate(res_names))
         cmd = [ffmpeg, "-v", "error", "-y", "-threads", str(FFMPEG_THREADS), "-i", str(src), "-filter_complex", fc]
         outs = []
         for i, r in enumerate(res_names):
             o = Path(td) / f"{r}.mp4"; outs.append(o)
             cmd += ["-map", f"[o{i}]", "-c:v", "libx265", "-crf", str(X265_CRF), "-preset", X265_PRESET,
-                    "-x265-params", f"keyint={k}:min-keyint={k}:scenecut=0:log-level=error", "-tag:v", "hvc1",
+                    "-x265-params", f"keyint={gop}:min-keyint={gop}:scenecut=0:log-level=error", "-tag:v", "hvc1",
                     "-pix_fmt", "yuv420p", *vsync_passthrough(ffmpeg), "-an", "-movflags", "+faststart", str(o)]
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.returncode != 0:
             return {"ok": False, "error": f"ffmpeg: {p.stderr.strip()[-300:]}", "src": sp}
+        expect = math.ceil(sp["nb_frames"] / kdec)
         out = {}
         for r, o in zip(res_names, outs):
             op = ffprobe_stream(ffprobe, o)
-            if op["nb_frames"] != sp["nb_frames"]:
-                return {"ok": False, "error": f"frame count {op['nb_frames']} != source {sp['nb_frames']} at {r}", "src": sp}
+            if op["nb_frames"] != expect:
+                return {"ok": False, "error": f"frame count {op['nb_frames']} != expected {expect} (source {sp['nb_frames']} / {kdec}) at {r}", "src": sp}
+            if abs(op["fps"] - out_fps) > 0.05:
+                return {"ok": False, "error": f"stored fps {op['fps']:.3f} != expected {out_fps:.3f} at {r}", "src": sp}
             out[r] = {"bytes": o.read_bytes(), "probe": op}
-        return {"ok": True, "src": sp, "out": out}
+        return {"ok": True, "src": sp, "k": kdec, "out": out}
 
 
 # ----------------------------------------------------------------------------- group driver
@@ -149,8 +163,9 @@ def build_sample(res: str, cid: str, clip: pd.Series, ann: pd.Series, result: di
     poses = np.asarray(ann["poses"], np.float32).reshape(-1, 7); intr = np.asarray(ann["intrinsics"], np.float32).reshape(-1, 4)
     fidx = np.asarray(ann["annot_frame_idx"], np.int32)
     s = dict(video=result["out"][res]["bytes"], clip_id=cid, source_id=str(clip.get("source_id", "")),
-             group_id=int(clip["group_id"]), width=op["width"], height=op["height"], fps=float(sp["fps"]),
-             num_frames=int(op["nb_frames"]), duration_s=float(op["nb_frames"] / sp["fps"]),
+             group_id=int(clip["group_id"]), width=op["width"], height=op["height"], fps=float(op["fps"]),
+             num_frames=int(op["nb_frames"]), duration_s=float(op["nb_frames"] / op["fps"]),
+             src_fps=float(sp["fps"]), src_num_frames=int(sp["nb_frames"]),
              src_start_us=int(clip.get("src_start_us", -1) if pd.notna(clip.get("src_start_us", np.nan)) else -1),
              src_end_us=int(clip.get("src_end_us", -1) if pd.notna(clip.get("src_end_us", np.nan)) else -1),
              n_annot=int(len(poses)), annot_frame_idx=npy_bytes(fidx), poses=npy_bytes(poses), intrinsics=npy_bytes(intr),
@@ -164,18 +179,32 @@ def build_sample(res: str, cid: str, clip: pd.Series, ann: pd.Series, result: di
     return s
 
 
+def claim_group(lay: Layout, gid: int, res: str, fps: int | None) -> bool:
+    """Atomically claim a group for this host (O_EXCL on the shared work dir). False if another host holds it."""
+    d = lay.shard_axis_dir(res, fps); d.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(d / f"{GROUP_FMT.format(gid=gid)}.claim", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    os.write(fd, f"{socket.gethostname()} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n".encode()); os.close(fd)
+    return True
+
+
 def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limit: int | None, ffmpeg: str, ffprobe: str,
-                 tmp_root: str, log_every: int = 100) -> dict:
+                 tmp_root: str, fps: int | None = None, claim: bool = False, log_every: int = 100) -> dict:
     gname = GROUP_FMT.format(gid=gid)
-    done = all((lay.shard_dir(r, gid) / "_shard_manifest.json").exists() for r in res_names)
+    done = all((lay.shard_dir(r, gid, fps) / "_shard_manifest.json").exists() for r in res_names)
     if done:
-        print(f"[{gname}] shards exist for {res_names}, skipping"); return {"group": gid, "skipped": True}
+        print(f"[{gname}] shards exist for {[axis_name(r, fps) for r in res_names]}, skipping"); return {"group": gid, "skipped": True}
+    if claim and not claim_group(lay, gid, res_names[0], fps):
+        print(f"[{gname}] claimed by another host, skipping"); return {"group": gid, "skipped": True}
     clips = pd.read_parquet(lay.index_dir / "clips.parquet"); clips = clips[clips.group_id == gid].set_index("clip_id")
     ann = pd.read_parquet(lay.index_dir / "annotations" / f"{gname}.parquet").set_index("clip_id")
     eligible = clips.index[clips["annot_ok"]].intersection(ann.index)
     cap = min(len(eligible), limit) if limit else len(eligible)
-    writers = {r: ShardWriter(lay.shard_dir(r, gid), FIELD_TYPES, cap) for r in res_names}
-    stats = dict(group=gid, eligible=int(len(eligible)), submitted=0, written=0, failed=0, not_in_index=0, bytes={r: 0 for r in res_names}, src_bytes=0)
+    writers = {r: ShardWriter(lay.shard_dir(r, gid, fps), FIELD_TYPES, cap) for r in res_names}
+    stats = dict(group=gid, fps=fps, host=socket.gethostname(), eligible=int(len(eligible)), submitted=0, written=0, failed=0, not_in_index=0,
+                 bytes={r: 0 for r in res_names}, src_bytes=0, decimation=Counter())
     t0 = time.time(); errors: list[dict] = []
     pending: deque = deque()
     window = 2 * workers
@@ -189,7 +218,7 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
                 writers[r].add(build_sample(r, cid, clips.loc[cid], ann.loc[cid], res),
                                dict(clip_id=cid, group_id=gid, num_frames=res["out"][r]["probe"]["nb_frames"], video_bytes=len(res["out"][r]["bytes"])))
                 stats["bytes"][r] += len(res["out"][r]["bytes"])
-            stats["written"] += 1
+            stats["written"] += 1; stats["decimation"][str(res.get("k", 1))] += 1
             if stats["written"] % log_every == 0:
                 el = time.time() - t0; rate = stats["written"] / el
                 print(f"[{gname}] {stats['written']}/{cap} clips, {rate:.2f} clips/s, eta {(cap - stats['written']) / max(rate, 1e-6) / 60:.1f} min, "
@@ -204,16 +233,18 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
                 break
             while len(pending) >= window:
                 drain(block=False); time.sleep(0.01) if len(pending) >= window else None
-            pending.append((ex.submit(encode_clip, (cid, data, tuple(res_names), ffmpeg, ffprobe, tmp_root)), cid))
+            pending.append((ex.submit(encode_clip, (cid, data, tuple(res_names), fps, ffmpeg, ffprobe, tmp_root)), cid))
             stats["submitted"] += 1; stats["src_bytes"] += len(data)
         drain(block=True)
-    extra = dict(group=gname, encode=dict(codec="libx265", crf=X265_CRF, preset=X265_PRESET, gop_seconds=GOP_SECONDS), errors=errors)
+    extra = dict(group=gname, encode=dict(codec="libx265", crf=X265_CRF, preset=X265_PRESET, gop_seconds=GOP_SECONDS, fps=fps), errors=errors)
     for r in res_names:
         writers[r].finalize(extra={**extra, "res": r})
-    stats["seconds"] = round(time.time() - t0, 1); stats["errors"] = errors[:20]
+    stats["seconds"] = round(time.time() - t0, 1); stats["errors"] = errors[:20]; stats["decimation"] = dict(stats["decimation"])
     print(f"[{gname}] done: {stats['written']} written, {stats['failed']} failed, {stats['not_in_index']} skipped (not in index / no annotations), "
-          f"{stats['seconds']} s; size vs source: " + ", ".join(f"{r} {stats['bytes'][r] / max(stats['src_bytes'], 1) * 100:.1f}%" for r in res_names), flush=True)
-    (lay.shards_dir / f"{gname}.stats.json").write_text(json.dumps(stats, indent=1, default=str))
+          f"{stats['seconds']} s; size vs source: " + ", ".join(f"{r} {stats['bytes'][r] / max(stats['src_bytes'], 1) * 100:.1f}%" for r in res_names)
+          + (f"; decimation {stats['decimation']}" if fps else ""), flush=True)
+    stats_dir = lay.shard_axis_dir(res_names[0], fps) / "stats"; stats_dir.mkdir(parents=True, exist_ok=True)
+    (stats_dir / f"{gname}.stats.json").write_text(json.dumps(stats, indent=1, default=str))
     return stats
 
 
@@ -221,6 +252,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--raw", required=True, type=Path); ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--res", default=",".join(RES)); ap.add_argument("--groups", default="all")
+    ap.add_argument("--fps", type=int, default=None, help="build the <fps>-fps stores (integer decimation per clip); default: native fps")
+    ap.add_argument("--claim", action="store_true", help="fleet mode: atomically claim each group on the shared work dir before encoding")
     ap.add_argument("--limit", type=int, default=None, help="max clips per group (test runs)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) // FFMPEG_THREADS))
     ap.add_argument("--ffmpeg", default=None, help="ffmpeg binary or a bin/ directory (default: PATH or $SPATIALVID_FFMPEG)")
@@ -233,10 +266,12 @@ def main(argv=None) -> int:
         print(f"{ffmpeg} lacks libx265 (conda: conda create -p <env> -c conda-forge 'ffmpeg>=7,<8')", file=sys.stderr); return 2
     clips = pd.read_parquet(lay.index_dir / "clips.parquet", columns=["group_id"])
     groups = parse_groups(a.groups, sorted(clips.group_id.unique().tolist()))
-    print(f"encode {len(groups)} groups -> {res_names}, {a.workers} workers x {FFMPEG_THREADS} ffmpeg threads, ffmpeg={ffmpeg}")
+    print(f"encode {len(groups)} groups -> {[axis_name(r, a.fps) for r in res_names]}, {a.workers} workers x {FFMPEG_THREADS} ffmpeg threads, "
+          f"ffmpeg={ffmpeg}, host={socket.gethostname()}", flush=True)
     lay.shards_dir.mkdir(parents=True, exist_ok=True)
     for gid in groups:
-        encode_group(lay, gid, res_names, a.workers, a.limit, ffmpeg, ffprobe, a.tmp or tempfile.gettempdir())
+        encode_group(lay, gid, res_names, a.workers, a.limit, ffmpeg, ffprobe, a.tmp or tempfile.gettempdir(), fps=a.fps, claim=a.claim)
+    print("ENCODE-EXIT all requested groups done", flush=True)
     return 0
 
 

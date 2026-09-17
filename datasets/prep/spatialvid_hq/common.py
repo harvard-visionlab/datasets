@@ -21,6 +21,28 @@ GROUP_FMT = "group_{gid:04d}"
 RES = {"640x360": (640, 360), "456x256": (456, 256)}
 RES_ALIASES = {"640": "640x360", "360p": "640x360", "456": "456x256", "256p": "456x256"}
 
+# Frame-rate axis of the registry. `None` = native source fps (60/30/24/50/25, the archive stores). An fps store
+# `F` holds every clip decimated by the integer factor k = round(src_fps / F) (lowered until src_fps / k >= F - 0.1),
+# i.e. the sparsest integer subsampling that still has >= F frames per second: 60 -> 30, 50 -> 50, 24 -> 24 for F = 30;
+# 60 -> 15, 50 -> 16.7, 30 -> 15, 24 -> 24 for F = 15. Timestamps stay on the source grid (k / src_fps), so
+# time-based sampling and pose interpolation are unaffected; `annot_frame_idx` keeps *source* frame indices and the
+# stores record `src_fps` / `src_num_frames` next to the stored `fps` / `num_frames`.
+FPS_TARGETS = (30, 15)
+
+
+def decimation_factor(src_fps: float, target_fps: int | None) -> int:
+    if not target_fps:
+        return 1
+    k = max(1, int(round(src_fps / target_fps)))
+    while k > 1 and src_fps / k < target_fps - 0.1:
+        k -= 1
+    return k
+
+
+def axis_name(res: str, fps: int | None) -> str:
+    """Store / shard axis label: '456x256' (native fps) or '456x256-30fps'."""
+    return res if not fps else f"{res}-{int(fps)}fps"
+
 # Encode settings settled by measurement (slipstream/experiments/spatialvid_inspection/DECISIONS.md):
 # x265 crf 29 matches the source bitrate at 720p; keyframe every 1 s (+8.8 % bytes, 2.3x faster random windows).
 X265_CRF = 29
@@ -36,9 +58,11 @@ FIELD_TYPES: dict[str, str] = {
     "group_id": "int",
     "width": "int",
     "height": "int",
-    "fps": "float",
+    "fps": "float",             # of the STORED video (decimated in fps stores)
     "num_frames": "int",
     "duration_s": "float",
+    "src_fps": "float",         # of the source clip (== fps in native-fps stores; absent in stores built before 2026-09-17)
+    "src_num_frames": "int",    # annot_frame_idx indexes source frames: annotation time = annot_frame_idx / src_fps
     "src_start_us": "int",      # clip position inside the source video
     "src_end_us": "int",
     "n_annot": "int",           # number of annotated (pose) frames
@@ -77,8 +101,11 @@ class Layout:
     def stores_dir(self) -> Path: return self.out / "stores"
     def video_tar(self, gid: int) -> Path: return self.raw / "videos" / f"{GROUP_FMT.format(gid=gid)}.tar.gz"
     def annotation_tar(self, gid: int) -> Path: return self.raw / "annotations" / f"{GROUP_FMT.format(gid=gid)}.tar.gz"
-    def store_dir(self, res: str, fmt: str = "h265") -> Path: return self.stores_dir / f"{DATASET}-{fmt}-{res}"
-    def shard_dir(self, res: str, gid: int) -> Path: return self.shards_dir / res / GROUP_FMT.format(gid=gid)
+    def store_dir(self, res: str, fmt: str = "h265", fps: int | None = None) -> Path: return self.stores_dir / f"{DATASET}-{fmt}-{axis_name(res, fps)}"
+    def shard_axis_dir(self, res: str, fps: int | None = None) -> Path: return self.shards_dir / axis_name(res, fps)
+    def shard_dir(self, res: str, gid: int, fps: int | None = None) -> Path: return self.shard_axis_dir(res, fps) / GROUP_FMT.format(gid=gid)
+    @property
+    def logs_dir(self) -> Path: return self.out / "logs"
 
 
 def resolve_res(name: str) -> str:
@@ -160,7 +187,7 @@ def ffprobe_stream(ffprobe: str, path: str | Path) -> dict:
                          capture_output=True, text=True, check=True).stdout
     st = json.loads(out)["streams"][0]
     num, den = st["avg_frame_rate"].split("/")
-    return {"width": st["width"], "height": st["height"], "fps": int(num) / int(den),
+    return {"width": st["width"], "height": st["height"], "fps": int(num) / int(den), "fps_frac": (int(num), int(den)),
             "nb_frames": int(st.get("nb_frames", 0)), "codec": st["codec_name"], "tag": st.get("codec_tag_string")}
 
 
