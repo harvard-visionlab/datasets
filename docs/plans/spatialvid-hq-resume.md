@@ -14,14 +14,14 @@ Read this first, then `spatialvid-hq-subsets-and-loader.md` (design + all measur
 | training population `person_carried_v0` | `subsets/` + `.report.md` | done: 213,103 clips (walk 187,713 / rig 25,390), 644 h, 82 channels |
 | **split v3 (adopted)** = train / val / test | `splits/v3.parquet` + report, S3 | **done**: train 186,710 · val 15,029 (whole held-out videos of channels in train, ≤ 1.2 pp off train per stratum) · test 11,364 (7 whole channels never in train: 4K Nature and City Walks, The Flying Dutchman, Justwalk, TokyoNinjaWalk, Drifted Films, Hui Chen, Trillionex Travel; walk-only, Cloudy-heavy — the transfer metric, reported separately). `make_splits --val-unit three --test-clips 11000 --val-clips 15000 --max-source-clips 200 --max-unit-frac 0.015`. v2a–g candidates kept for reference, not used. |
 | **registry**: `load("spatialvid-hq", split=, subset=, rate_hz=, res=, fps=, where=, channel_cap=)` → `VideoDataset` | `datasets/video_dataset.py`, `_configs/spatialvid_hq.py`, tests `tests/test_video_registry.py` | **done** (13 tests). Store pick: sparsest store whose fps divides `rate_hz`, unbuilt stores skipped with a warning (so today 15 Hz → native store; → 15 fps store once synced). Local order: `$SLIPSTREAM_CACHE_DIR/<store>` → QNAP mount → S3 download of that store only. `ds.window_sampler`, `ds.poses_at(rec, t_sec)` (batched, time-based, uses `src_fps`). |
-| slipstream 0.7.0 | branch `feat/window-loader-array-fields` (13 commits ahead of main, CHANGELOG + tests in place) | **not merged/tagged**: the datasets2 session could not message slipstream2 (cross-session send denied by the permission classifier). **User: ask slipstream2 to merge + tag v0.7.0**, then pin `visionlab-slipstream >= 0.7.0` here. |
+| slipstream 0.7.0 | `origin/main` = 6e41138, tag `v0.7.0` (slipstream2, 2026-09-17) | **done**; pinned here (`pyproject.toml` git rev `v0.7.0`, `uv.lock` updated, local env synced, 78 tests pass). **machina container venv still has 0.6.0**: run `uv sync --group video` there *after* the fleet encode finishes (encode.py imports slipstream.cache lazily; do not swap packages under running encoders). Until then `PYTHONPATH=/tmp/ss` for loader work on machina. |
 | local-SSD copy of the native 456x256 store on machina | `~/work/DataLocal/slipstream-cache/spatialvid-hq-h265-456x256` (169 GB) | done; `SLIPSTREAM_CACHE_DIR=~/work/DataLocal/slipstream-cache` makes `load()` use it |
 | demo (registry → anchors → `DecodeVideoWindow` → `poses_at`) | `/tmp/demo_e2e.py` in the machina container (scratch; to become `notebooks/spatialvid_hq_loader_demo.ipynb`) | run 2026-09-17 while the host encoded; see the session summary / re-run for numbers |
 
 ## Decisions taken 2026-09-17 (user)
 
 1. Split: **three-way** (test = whole typical channels, val = whole videos stratified to the remaining population) instead of v2f's single val. Adopted as v3.
-2. slipstream 0.7.0: merge + tag (pending slipstream2, see above). Pose interpolation is *not* a slipstream transform: the stage returns `video_t_sec`, `visionlab.datasets` interpolates (`VideoDataset.poses_at`, `video.interpolate_poses`).
+2. slipstream 0.7.0: merged + tagged v0.7.0, pinned here. Pose interpolation is *not* a slipstream transform: the stage returns `video_t_sec`, `visionlab.datasets` interpolates (`VideoDataset.poses_at`, `video.interpolate_poses`).
 3. fps stores: **30 fps first, then 15 fps, both resolutions** (4 stores); resolution and rate decided separately; 224p store not now. Decimation rule in `common.decimation_factor`: k = round(src/F) lowered until src/k ≥ F − 0.1 (60→30, 50→50, 24→24 at F=30; 60→15, 50→16.7, 30→15, 24→24 at F=15). Filter `select+setpts+fps` (the plain `fps` filter emits frame jk+1 for k=3,4 — measured).
 4. Window default for the first run: 4 s + 4 s at 15 Hz (T = 120).
 
@@ -39,7 +39,7 @@ Read this first, then `spatialvid-hq-subsets-and-loader.md` (design + all measur
 ## Next work items, in order
 
 1. Watch the fleet (`fleet.py status`); when `finish.log` says an axis is synced, `load(..., rate_hz=15)` picks it up automatically (config already lists all six stores). Verify one fps store with `VideoStore` (fps, src_fps, pts grid) — `verify_store.py` pattern from this session.
-2. slipstream 0.7.0 merge + tag (slipstream2) → pin here; move the demo into a notebook with throughput cold vs warm, local SSD vs CIFS, native vs 30 fps vs 15 fps store.
+2. `uv sync --group video` on machina + fleet hosts once encodes finish (slipstream 0.7.0); move the demo into a notebook with throughput cold vs warm, local SSD vs CIFS, native vs 30 fps vs 15 fps store.
 3. Per-store normalization stats (`metadata["stats"][store]`), `datasets-cli list` support for video stores.
 4. Dataset card (next-steps §2): population definition, v3 split, channel concentration, exclusions, fps stores.
 5. Later: per-clip stabilisation / gait statistics; VLM audit sample for carrier precision; RA-4M prep (`datasets/prep/relate_anything_4M/SEED.md`).

@@ -14,7 +14,7 @@ requires-python = ">=3.10,<3.13"
 
 dependencies = [
     # Slipstream data loader
-    "visionlab-slipstream@git+https://github.com/harvard-visionlab/slipstream.git@main",
+    "visionlab-slipstream@git+https://github.com/harvard-visionlab/slipstream.git@v0.7.0",   # >= 0.7.0: DecodeVideoWindow, sample_data, array fields
 
     # Torch stack (for preprocessing transforms)
     "torch>=2.1.0",
