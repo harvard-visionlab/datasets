@@ -13,10 +13,22 @@ to slipstream stores, an index and versioned splits. Decisions and measurements 
   index/annotations/group_XXXX.parquet   per-clip poses/intrinsics/frame indices (flat lists), caption, instructions
   index/sources.parquet                  one row per YouTube source: title/description/tags/channel/duration (carrier evidence)
   index/sources_raw/youtube_*.jsonl      verbatim API responses (archive; videos disappear over time)
-  splits/<version>.parquet + .report.md  clip_id -> split (source-level, stratified)
-  shards/<res>/group_XXXX/               per-group slipstream shard (resumable unit)
-  stores/spatialvid-hq-h265-<res>/       final slipstream cache + records.parquet + store_manifest.json
+  splits/<version>.parquet + .report.md  clip_id -> split (whole videos / whole channels, stratified); v3 = train/val/test
+  subsets/<name>.parquet + .report.md    a named clip population (person_carried_v0)
+  shards/<axis>/group_XXXX/              per-group slipstream shard (resumable unit); axis = <res> or <res>-<fps>fps
+  shards/<axis>/group_XXXX.claim         fleet mode: which host owns the group
+  stores/spatialvid-hq-h265-<axis>/      final slipstream cache + records.parquet + store_manifest.json
+  logs/encode_<host>_<axis>.log          fleet logs (status.py reads them)
 ```
+
+**Store axes.** `res` ∈ {640x360, 456x256} × `fps` ∈ {native, 30, 15}. An fps store holds every clip decimated by an
+integer factor k (`common.decimation_factor`: k = round(src/F) lowered until src/k ≥ F − 0.1), so 60 fps → 30, 50 → 50,
+24 → 24 at F = 30 and 60 → 15, 50 → 16.7, 30 → 15, 24 → 24 at F = 15. Frames are exactly 0, k, 2k, … with timestamps on
+the k/src grid (`select=not(mod(n\,k)),setpts=N*k/FRAME_RATE/TB,fps=src/k`; the plain `fps` filter emits frame jk+1 for
+k = 3, 4 — measured). `fps`/`num_frames`/`duration_s` describe the stored video; `src_fps`/`src_num_frames` the source, and
+`annot_frame_idx` keeps *source* frame indices (annotation time = `annot_frame_idx / src_fps`). Decode cost per window
+follows the stored fps (60 → 30 fps halves it); bytes are ~80 % of native, not 50 %, because x265's CRF scales with the
+stream frame rate.
 
 ## Stages
 
@@ -25,9 +37,10 @@ to slipstream stores, an index and versioned splits. Decisions and measurements 
 | 1 | `python -m datasets.prep.spatialvid_hq.build_index --raw R --out O` | CSV, SpatialVID-RAW source CSV, 74 annotation tars | `index/` | ~10 min (gzip-bound, 8 procs) |
 | 1b | `python -m datasets.prep.spatialvid_hq.fetch_sources --out O [--api-key K]` | `index/clips.parquet`, YouTube Data API v3 (`videos.list`, ~450 quota units; `--backend ytdlp` fallback) | `index/sources_raw/*.jsonl` (verbatim archive), `index/sources.parquet` (title, description, tags, channel, category, duration, stats per source) | minutes; resumable |
 | 2b | `python -m datasets.prep.spatialvid_hq.make_subset --out O [--name person_carried_v0 --carriers walk,rig --max-speed 0.5]` | `index/channels.parquet`, `index/sources.parquet`, `index/clips.parquet` | `index/carrier_v1.parquet` (clip → carrier + rule), `subsets/<name>.parquet` + `.report.md` | seconds |
-| 2 | `python -m datasets.prep.spatialvid_hq.make_splits --out O --version v1 --val-clips 12000` | `index/clips.parquet` | `splits/v1.*` | seconds |
-| 3 | `python -m datasets.prep.spatialvid_hq.encode --raw R --out O [--groups 1-74] [--limit N] [--ffmpeg BIN]` | video tars + `index/` | `shards/<res>/group_XXXX/` | ~44 h both resolutions (x265 medium, 16×4 threads); resumable per group |
-| 4 | `python -m datasets.prep.spatialvid_hq.merge --out O` | shards | `stores/` | minutes (sequential copy) |
+| 2 | `python -m datasets.prep.spatialvid_hq.make_splits --out O --version v3 --subset subsets/person_carried_v0.parquet --dims scene_l1,tod,weather_c,crowd,motion,carrier --val-unit three --test-clips 11000 --val-clips 15000 --max-source-clips 200 --max-unit-frac 0.015` | `index/`, subset | `splits/v3.*` (train / val / test) | seconds |
+| 3 | `python -m datasets.prep.spatialvid_hq.encode --raw R --out O [--fps 30] [--groups 1-74] [--claim] [--limit N] [--ffmpeg BIN]` | video tars + `index/` | `shards/<axis>/group_XXXX/` | native both res ~44 h on machina; fps passes on the 5-host fleet ≈ 10 h (30) + 8 h (15); resumable per group |
+| 3f | `python -m datasets.prep.spatialvid_hq.fleet launch --fps 30` / `launch --fps 15 --after-fps 30` / `finish --fps-list 30,15` / `status` / `tail` / `ps` / `stop` / `sync` | ssh + `docker exec` on machina, thrace, vesper, leeloo, stelline | per-host `encode --groups all --claim`; `finish.py` merges + S3-syncs each axis when its 74 shards exist | run from any machine with ssh to the hosts |
+| 4 | `python -m datasets.prep.spatialvid_hq.merge --out O [--fps 30]` | shards | `stores/` | minutes (sequential copy); field types come from the shard manifests |
 
 Run with `uv run --group video python -m ...` from the repo root.
 
@@ -47,10 +60,11 @@ over records (`records.parquet`: `record_idx ↔ clip_id`), never separate store
 | --- | --- | --- |
 | `video` | bytes | MP4, HEVC Main yuv420p, `hvc1`, faststart, no audio, **keyframe every 1 s**, x265 crf 29; 640×360 or 456×256 |
 | `clip_id`, `source_id`, `group_id` | str, str, int | SpatialVID clip uuid; YouTube id of the source recording; HF packaging group |
-| `width`, `height`, `fps`, `num_frames`, `duration_s` | int, int, float, int, float | of the stored video (frame count equals the source; asserted at encode) |
+| `width`, `height`, `fps`, `num_frames`, `duration_s` | int, int, float, int, float | of the stored video (native stores: frame count equals the source; fps stores: `ceil(src_num_frames / k)`; asserted at encode) |
+| `src_fps`, `src_num_frames` | float, int | of the source clip (stores built from 2026-09-17; absent in the native stores built earlier, where they equal `fps` / `num_frames`) |
 | `src_start_us`, `src_end_us` | int | clip position inside the source recording (µs), from SpatialVID-RAW |
 | `n_annot` | int | number of annotated frames (stride `int(fps/5)`, ≈5–6 Hz) |
-| `annot_frame_idx` | bytes → int32 `(n_annot,)` | video frame index of each annotation row |
+| `annot_frame_idx` | bytes → int32 `(n_annot,)` | **source** frame index of each annotation row (time = `annot_frame_idx / src_fps`; in fps stores stored frame `j` is source frame `j·k`) |
 | `poses` | bytes → float32 `(n_annot, 7)` | `[tx ty tz qx qy qz qw]`, **world→camera**, OpenCV axes (x right, y down, z forward); scale is not metric |
 | `intrinsics` | bytes → float32 `(n_annot, 4)` | normalized `[fx fy cx cy]`; pixel values = `fx·width, fy·height, cx·width, cy·height` |
 | `instructions`, `caption` | str (JSON) | authors' merged motion-instruction spans; structured caption (scene/camera text, tags, motion trends) |

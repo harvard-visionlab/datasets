@@ -97,25 +97,29 @@ with resize to the model input, CPU or one GPU.
 
 The optional on-the-fly `VideoStore.frames_at_seconds` path stays for notebooks and eval at 640x360.
 
-## 4. Loader API
+## 4. Loader API (implemented 2026-09-17: `datasets/video_dataset.py`, config `_configs/spatialvid_hq.py`)
 
 ```python
 from visionlab.datasets import load
-ds = load("spatialvid-hq", split="train", fmt="h265", res="456x256",
+ds = load("spatialvid-hq", split="train",            # train | val | test | all   (split_version="v3" default)
+          fmt="h265", res="456x256",                   # store axes; res aliases "256p" / "360p"
+          rate_hz=15,                                  # picks the sparsest store whose fps divides the rate (15 → 15fps, 10 → 30fps, native fallback); or fps=30 explicitly
           subset="person_carried_v0",
-          where="carrier == 'walk'",          # optional pandas query over the subset table
-          channel_cap=0.05)                    # optional: max share of clips per channel (random thinning, seeded)
-# ds.cache        slipstream OptimizedCache (the h265 store)
-# ds.clips        DataFrame: the selected clips (subset ∩ split ∩ where ∩ cap) with record_idx
-# ds.stats        normalization stats for the store
+          where="carrier == 'walk'",          # optional pandas query over the clip table (subset + split columns)
+          channel_cap=0.05, seed=0)            # optional: max share of clips per channel (random thinning, seeded)
+# ds.cache        slipstream OptimizedCache (the chosen store); ds.store_dir, ds.store_key = (fmt, res, fps)
+# ds.clips        DataFrame: the selected clips (subset ∩ split ∩ where ∩ cap) with record_idx, duration_s, fps, src_fps, channel, carrier, strata
+# ds.indices      record_idx array for SlipstreamLoader(indices=)
+# ds.stats        normalization stats for the store (None until computed)
 
 stage = DecodeVideoWindow(T=120, rate_hz=15, seed=0, resize=224, transforms=[RandomResizedCropBatch(...), flip])
 # clips shorter than window_s = T / rate_hz are filtered here (the stage raises on a misfit at decode time)
-recs, t0 = ds.window_sampler(window_s=8.0, anchors_per_clip=k, seed=0).sample(epoch)   # or let the stage draw t0
-loader = SlipstreamLoader(ds.cache, indices=recs, sample_data={"t0": t0}, batch_size=32, pipelines={"video": [stage]}, ...)
+recs, t0 = ds.window_sampler(window_s=8.0, anchors_per_clip=k, seed=0).sample(epoch)   # or let the stage draw t0 (stage seed)
+loader = SlipstreamLoader(SlipstreamDataset(local_dir=str(ds.store_dir)), indices=recs, sample_data={"t0": t0}, image_field="video",
+                          batch_size=32, pipelines={"video": [stage]}, ...)        # stage: DecodeVideoWindow(T=120, rate_hz=15, resize=224, t0_key="t0")
 for batch in loader:
     batch["video"]        # [B, T, 3, H, W] uint8, same crop/flip/color across T
-    batch["video_t_sec"]  # [B, T] true frame times → poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])  [B, T, 7]
+    batch["video_t_sec"]  # [B, T] true frame times → poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])  [B, T, 7]  (time-based; uses src_fps)
     rel = relative_motion(poses)   # [B, T-1, 6] camera-t axes, from visionlab.datasets.video
     batch["clip_id"], batch["source_id"], batch["channel_id"], batch["carrier"]
 ```
@@ -148,7 +152,15 @@ under-filled cells are exactly the atypical channels: house-tour rigs, Interior)
 strata mix is closest to the population, L1 over cells, ≤ 1.5 % of clips each) keeps the deviation under 5 pp at a
 6k core. Rain: v2a val rain is 85 % Rain Everyday like train; v2f 66 %; v2g 49 % but at 12 pp imbalance.
 
-**Recommendation:** adopt **v2f** as `splits/v2.parquet`: 21,012 val clips = 6,004 from 3 held-out channels
+**Superseded 2026-09-17 → v3 (adopted).** The user asked for a three-way split instead: `test` = whole *typical* channels
+never seen in training (7 channels, 11,364 clips, walk-only; the transfer metric, reported separately), `val` = whole held-out
+videos of the remaining channels, stratified to the remaining population (15,029 clips, ≤ 1.2 pp off train on every stratum
+value), `train` = 186,710. `make_splits --val-unit three --test-clips 11000 --val-clips 15000 --max-source-clips 200
+--max-unit-frac 0.015`; report `splits/v3.report.md`. The video cap of 200 clips (not the default 40) matters: it keeps the
+long walking videos val-eligible (Rain Everyday val share 12.6 → 17.3 %). Larger test sets tried: 10 channels / 14.5k clips
+(`--test-clips 14000`) also fine (val 1.9 pp). Original v2f recommendation kept below for the record.
+
+**Recommendation (v2f, superseded):** adopt **v2f** as `splits/v2.parquet`: 21,012 val clips = 6,004 from 3 held-out channels
 (`val_kind = channel`, the new-channel metric, reported separately) + 15,008 from held-out videos of the other
 channels (`val_kind = video`, the in-distribution metric, balanced). Train = 192,091 clips of the subset. Clips
 outside the subset follow their video / channel. **decide**: adopt v2f, or trade balance for a larger new-channel
