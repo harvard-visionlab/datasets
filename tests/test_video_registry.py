@@ -37,7 +37,8 @@ def _tables():
     records = pd.DataFrame({"record_idx": np.arange(8), "clip_id": [f"c{i}" for i in range(8)], "duration_s": [3.0, 9.0, 12.0, 8.5, 15.0, 2.0, 10.0, 11.0], "fps": [30.0] * 8})
     split = pd.DataFrame({"clip_id": [f"c{i}" for i in range(7)], "split": ["train", "train", "val", "test", "train", "train", "val"],
                           "channel_id": ["A", "A", "B", "C", "A", "A", "B"], "carrier": ["walk", "rig", "walk", "walk", "walk", "walk", "walk"]})
-    subset = pd.DataFrame({"clip_id": ["c0", "c1", "c2", "c3", "c4", "c6", "c7"], "record_idx": [99] * 7, "carrier": ["walk", "rig", "walk", "walk", "walk", "walk", "walk"]})
+    subset = pd.DataFrame({"clip_id": ["c0", "c1", "c2", "c3", "c4", "c6", "c7"], "record_idx": [99] * 7, "fps": [60.0] * 7, "duration_s": [-1.0] * 7,
+                           "carrier": ["walk", "rig", "walk", "walk", "walk", "walk", "walk"]})
     return records, split, subset
 
 
@@ -46,6 +47,8 @@ def test_select_clips_split_subset_where():
     train = select_clips(records, split, "train", subset, None, None, 0)
     assert train["clip_id"].tolist() == ["c0", "c1", "c4"]            # c5 not in subset
     assert train["record_idx"].tolist() == [0, 1, 4]                  # store record_idx wins over the subset's column
+    assert train["fps"].tolist() == [30.0] * 3 and train["duration_s"].tolist() == [3.0, 9.0, 15.0]   # store fps / duration win, no _x/_y suffixes
+    assert not [c for c in train.columns if c.endswith(("_x", "_y"))]
     allc = select_clips(records, split, "all", subset, None, None, 0)
     assert allc.loc[allc.clip_id == "c7", "split"].item() == "excluded"   # not in the split table
     walk = select_clips(records, split, "train", subset, "carrier == 'walk'", None, 0)

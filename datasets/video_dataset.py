@@ -228,10 +228,11 @@ def select_clips(records, split_df, split: str, subset_df, where: str | None, ch
     import pandas as pd
     df = records
     if subset_df is not None:
-        sub = subset_df.drop(columns=[c for c in ("record_idx",) if c in subset_df])   # record_idx is store-specific
+        # the store's own columns win (record_idx / fps / duration_s are store-specific: fps stores are decimated)
+        sub = subset_df[[c for c in subset_df.columns if c == "clip_id" or c not in df.columns]]
         df = df.merge(sub, on="clip_id", how="inner")
     if split_df is not None:
-        cols = [c for c in split_df.columns if c not in df.columns or c == "clip_id"]
+        cols = [c for c in split_df.columns if c == "clip_id" or c not in df.columns]
         df = df.merge(split_df[cols], on="clip_id", how="left")
         df["split"] = df["split"].fillna("excluded")
         if split != "all":
