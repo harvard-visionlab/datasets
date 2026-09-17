@@ -67,14 +67,25 @@ def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: 
             for c2, k in src_cells.xs(sid, level=unit).items(): val_cell[c2] += int(k); val_src_per_cell[c2] += 1
     # pass 2: greedy marginal matching until the clip target is reached
     deficit = lambda c: cell_total[c] * target_frac - val_cell[c]
-    for sid in eligible:
-        if val_n >= val_clips: break
-        if sid in val_sources: continue
+    def gain_of(sid):
         cells = src_cells.xs(sid, level=unit)
-        gain = sum(min(k, max(0.0, deficit(c))) for c, k in cells.items()) / int(src.n[sid])
-        if gain < 0.5: continue          # unit would mostly overfill already-satisfied cells
-        val_sources.add(sid); val_n += int(src.n[sid])
-        for c, k in cells.items(): val_cell[c] += int(k)
+        return sum(min(k, max(0.0, deficit(c))) for c, k in cells.items()) / int(src.n[sid]), cells
+    if unit == "source_id":                       # many small units: first-come in random order is fine and fast
+        for sid in eligible:
+            if val_n >= val_clips: break
+            if sid in val_sources: continue
+            gain, cells = gain_of(sid)
+            if gain < 0.5: continue               # unit would mostly overfill already-satisfied cells
+            val_sources.add(sid); val_n += int(src.n[sid])
+            for c, k in cells.items(): val_cell[c] += int(k)
+    else:                                         # few large units (channels): best-first, never overshoot the target by > 15 %
+        pool = [sid for sid in eligible if sid not in val_sources]
+        while pool and val_n < val_clips:
+            scored = sorted(((gain_of(sid)[0], sid) for sid in pool if val_n + int(src.n[sid]) <= val_clips * 1.15), reverse=True)
+            if not scored or scored[0][0] < 0.3: break
+            sid = scored[0][1]; pool.remove(sid)
+            val_sources.add(sid); val_n += int(src.n[sid])
+            for c, k in src_cells.xs(sid, level=unit).items(): val_cell[c] += int(k)
     return df[unit].isin(val_sources).map({True: "val", False: "train"}), val_sources
 
 
