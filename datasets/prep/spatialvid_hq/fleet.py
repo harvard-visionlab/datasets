@@ -2,6 +2,8 @@
 
     uv run python -m datasets.prep.spatialvid_hq.fleet launch --fps 30 [--res 640x360,456x256] [--hosts thrace,vesper,...]
     uv run python -m datasets.prep.spatialvid_hq.fleet sync [--hosts ...]       # rsync this checkout to the hosts (fleet containers cannot git pull)
+    uv run python -m datasets.prep.spatialvid_hq.fleet launch --fps 15 --after-fps 30   # per host: start once its 30 fps encode exits
+    uv run python -m datasets.prep.spatialvid_hq.fleet finish --fps-list 30,15   # on machina: merge + S3 sync each axis when its 74 shards exist
     uv run python -m datasets.prep.spatialvid_hq.fleet status --fps 30          # runs status.py on machina
     uv run python -m datasets.prep.spatialvid_hq.fleet ps                       # encode processes per host
     uv run python -m datasets.prep.spatialvid_hq.fleet stop [--hosts ...]       # kill encode on hosts (claims of unfinished groups must be removed by hand)
@@ -50,7 +52,8 @@ def axis(res: str, fps: int | None) -> str:
     return "-".join(r for r in res.split(",")) + (f"-{fps}fps" if fps else "")
 
 
-def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, extra: str) -> None:
+def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, extra: str, after_fps: int | None = None) -> None:
+    """`after_fps`: start only once this host's running encode for that fps axis has exited (chains passes per host)."""
     for h in hosts:
         raw, out = paths(h); tmp = HOSTS[h][1]
         log = f"{out}/logs/encode_{h}_{axis(res, fps)}.log"
@@ -62,11 +65,23 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
         if r.returncode:
             print(f"[{h}] bootstrap FAILED: {(r.stderr or r.stdout).strip()[-400:]}"); continue
         print(f"[{h}] repo at {r.stdout.strip().splitlines()[-1]}")
-        cmd = (f"cd {REPO} && FLEET_HOST={h} nohup uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.encode --raw {raw} --out {out} "
+        wait = (f"while pgrep -f 'spatialvid_hq.encode .*--fps {after_fps}( |$)' > /dev/null; do sleep 60; done; " if after_fps else "")
+        cmd = (f"cd {REPO} && {wait}FLEET_HOST={h} nohup uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.encode --raw {raw} --out {out} "
                f"--res {res} --groups all --claim --tmp {tmp}" + (f" --fps {fps}" if fps else "") + (f" --workers {workers}" if workers else "")
                + (f" {extra}" if extra else "") + f" > {log} 2>&1 &")
+        if after_fps:
+            cmd = f"nohup bash -c {shlex.quote(cmd)} > /dev/null 2>&1 &"
         r = ssh(h, cmd, detach=True)
         print(f"[{h}] {'launched' if r.returncode == 0 else 'launch FAILED: ' + r.stderr.strip()[-300:]} -> {log}")
+
+
+def finish(fps_list: str, res: str) -> None:
+    """Start finish.py on machina: merges + S3-syncs each axis once all its shards exist."""
+    _raw, out = paths("machina")
+    cmd = (f"cd {REPO} && nohup uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.finish --out {out} --res {res} --fps {fps_list} "
+           f"> {out}/logs/finish.log 2>&1 &")
+    r = ssh("machina", cmd, detach=True)
+    print(f"[machina] finisher {'launched' if r.returncode == 0 else 'FAILED: ' + r.stderr[-300:]} -> {out}/logs/finish.log")
 
 
 def sync(hosts: list[str]) -> None:
@@ -106,7 +121,9 @@ def status(fps: int | None, res: str) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["launch", "sync", "status", "ps", "stop", "tail"])
+    ap.add_argument("cmd", choices=["launch", "sync", "finish", "status", "ps", "stop", "tail"])
+    ap.add_argument("--after-fps", type=int, default=None, help="launch: wait until the running encode of this fps axis exits (chain passes)")
+    ap.add_argument("--fps-list", default="30,15", help="finish: axes to merge + sync when complete")
     ap.add_argument("--hosts", default=",".join(HOSTS)); ap.add_argument("--fps", type=int, default=None)
     ap.add_argument("--res", default="640x360,456x256"); ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--extra", default="", help="extra args passed to encode (e.g. '--limit 5')"); ap.add_argument("-n", type=int, default=5)
@@ -115,7 +132,8 @@ def main(argv=None) -> int:
     unknown = [h for h in hosts if h not in HOSTS]
     if unknown:
         print(f"unknown hosts {unknown}; known {list(HOSTS)}", file=sys.stderr); return 2
-    if a.cmd == "launch": launch(hosts, a.fps, a.res, a.workers, a.extra)
+    if a.cmd == "launch": launch(hosts, a.fps, a.res, a.workers, a.extra, a.after_fps)
+    elif a.cmd == "finish": finish(a.fps_list, a.res)
     elif a.cmd == "sync": sync(hosts)
     elif a.cmd == "ps": ps(hosts)
     elif a.cmd == "stop": stop(hosts)

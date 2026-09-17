@@ -155,9 +155,18 @@ class VideoStore:
         return self._decode(idx, "get_frames_played_at", seconds=list(seconds))
 
     def poses_at(self, idx: int, frame_idx, rec: dict | None = None) -> np.ndarray:
-        """Interpolate world->camera poses to arbitrary video frame indices (linear t, slerp q)."""
+        """Interpolate world->camera poses to arbitrary STORED-video frame indices (linear t, slerp q).
+        In decimated (fps) stores the annotation rows index source frames, so the request is converted through
+        `src_fps / fps`; prefer `poses_at_seconds` with the decoder's true frame times."""
         rec = rec or self.record(idx)
-        return interpolate_poses(rec["poses"], rec["annot_frame_idx"], np.asarray(frame_idx))
+        k = rec.get("src_fps", rec["fps"]) / rec["fps"]
+        return interpolate_poses(rec["poses"], rec["annot_frame_idx"], np.asarray(frame_idx, np.float64) * k)
+
+    def poses_at_seconds(self, idx: int, t_sec, rec: dict | None = None) -> np.ndarray:
+        """Interpolate world->camera poses to presentation times in seconds (annotation time = annot_frame_idx / src_fps)."""
+        rec = rec or self.record(idx)
+        t_annot = np.asarray(rec["annot_frame_idx"], np.float64) / rec.get("src_fps", rec["fps"])
+        return interpolate_poses(rec["poses"], t_annot, np.asarray(t_sec, np.float64))
 
 
 # ---------------------------------------------------------------- pose math (numpy only, xyzw quaternions)
@@ -176,7 +185,8 @@ def quat_slerp(q0: np.ndarray, q1: np.ndarray, t: np.ndarray) -> np.ndarray:
 
 
 def interpolate_poses(poses: np.ndarray, annot_frame_idx: np.ndarray, frame_idx: np.ndarray) -> np.ndarray:
-    """poses (n,7) at annot_frame_idx (n,) -> (m,7) at frame_idx; clamps outside the annotated range."""
+    """poses (n,7) at annot_frame_idx (n,) -> (m,7) at frame_idx; clamps outside the annotated range.
+    Any monotonic coordinate works for both (frame indices or seconds), as long as they agree."""
     poses = np.asarray(poses, np.float64); af = np.asarray(annot_frame_idx, np.float64); fi = np.asarray(frame_idx, np.float64)
     fi = fi.clip(af[0], af[-1])
     j = np.searchsorted(af, fi, side="right").clip(1, len(af) - 1); i = j - 1

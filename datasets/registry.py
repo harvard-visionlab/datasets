@@ -27,13 +27,24 @@ class DatasetConfig:
     Args:
         name: Short identifier (e.g., "imagenet1k", "imagenette").
         num_classes: Number of classes.
-        remote_cache: Mapping of (split, fmt) → S3 remote cache path.
+        remote_cache: Mapping of (split, fmt) → S3 remote cache path (image datasets: one store per split).
         metadata: Arbitrary extra metadata (label maps, class lists, etc.).
+        stores: Video datasets: mapping of (fmt, res, fps) → S3 store path; fps None = native frame rate. Splits
+            are index sets, not stores.
+        splits: Video datasets: split version → S3 parquet (clip_id → split).
+        subsets: Video datasets: subset name → S3 parquet (the clip population of a named subset).
     """
     name: str
     num_classes: int
     remote_cache: dict[tuple[str, str], str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    stores: dict[tuple, str] = field(default_factory=dict)
+    splits: dict[str, str] = field(default_factory=dict)
+    subsets: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def is_video(self) -> bool:
+        return bool(self.stores)
 
 
 # Global registry
@@ -61,18 +72,25 @@ def get_config(name: str) -> DatasetConfig:
     return REGISTRY[name]
 
 
-def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
-    """Load a registered dataset as a SlipstreamDataset.
+def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
+    """Load a registered dataset: a SlipstreamDataset (image datasets) or a VideoDataset (video datasets).
 
     Downloads the pre-built cache from S3 if not already present locally.
     Automatically configures the slipstream cache directory based on the
     detected platform.
 
-    Args:
-        name: Registered dataset name (e.g., "imagenet1k").
-        split: Dataset split (e.g., "train", "val").
+    Image datasets (``load("imagenet1k", split="val")``):
+        split: Dataset split (default "val").
         fmt: Image format ("jpeg" or "yuv420"). Default "jpeg".
         **kwargs: Additional arguments passed to SlipstreamDataset.
+
+    Video datasets (``load("spatialvid-hq", split="train", subset="person_carried_v0", rate_hz=15)``), see
+    :mod:`visionlab.datasets.video_dataset`:
+        split: "train" | "val" | "test" | "all" (default from the config). fmt: default "h265".
+        res: store resolution (e.g. "456x256", aliases "256p"); rate_hz: sampling rate the loader will use — picks
+        the sparsest store whose fps is a multiple of it; fps: pick a store's fps explicitly; subset: named clip
+        population; split_version: e.g. "v3"; where: pandas query over the clip table; channel_cap: max share of
+        clips per channel (seeded random thinning); seed.
 
     Returns:
         A SlipstreamDataset instance with normalization stats attached:
@@ -90,6 +108,10 @@ def load(name: str, split: str = "val", fmt: str = "jpeg", **kwargs):
     from slipstream.cache import MANIFEST_FILE
 
     config = get_config(name)
+    if config.is_video:
+        from .video_dataset import load_video
+        return load_video(config, split=split, fmt=fmt, **kwargs)
+    split = split or "val"; fmt = fmt or "jpeg"
 
     key = (split, fmt)
     if key not in config.remote_cache:
