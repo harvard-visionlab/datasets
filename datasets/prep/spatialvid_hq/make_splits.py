@@ -45,7 +45,7 @@ def derive_dims(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: int, main_cell_frac: float,
-           min_cell_sources: int, seed: int, unit: str = "source_id", min_unit_clips: int = 1) -> tuple[pd.Series, set]:
+           min_cell_sources: int, seed: int, unit: str = "source_id", min_unit_clips: int = 1, channel_pick: str = "typical") -> tuple[pd.Series, set]:
     """Greedy assignment of whole `unit`s (videos or channels) to val, matching joint strata-cell counts.
     Returns (split per clip, set of val units). `max_source_clips` is the per-unit clip cap for val eligibility."""
     rng = np.random.default_rng(seed)
@@ -59,7 +59,7 @@ def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: 
     eligible = src[(src.n <= max_source_clips) & (src.n >= min_unit_clips)].index.to_numpy(); rng.shuffle(eligible)
     val_sources: set[str] = set(); val_cell = Counter(); val_n = 0; val_src_per_cell = Counter()
     # pass 1: guarantee coverage of main cells with >= min_cell_sources sources each
-    for cell in sorted(main_cells, key=lambda c: -cell_total[c]):
+    for cell in (sorted(main_cells, key=lambda c: -cell_total[c]) if min_cell_sources > 0 else []):
         cands = src_cells.xs(cell, level="cell")
         cands = cands[cands.index.isin(eligible) & ~cands.index.isin(val_sources)].sort_values(ascending=False)
         for sid in cands.index[: max(0, min_cell_sources - val_src_per_cell[cell])]:
@@ -78,7 +78,7 @@ def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: 
             if gain < 0.5: continue               # unit would mostly overfill already-satisfied cells
             val_sources.add(sid); val_n += int(src.n[sid])
             for c, k in cells.items(): val_cell[c] += int(k)
-    else:                                         # few large units (channels): best-first, never overshoot the target by > 15 %
+    elif channel_pick == "deficit":               # few large units (channels): best-first on deficit coverage, never overshoot by > 15 %
         pool = [sid for sid in eligible if sid not in val_sources]
         while pool and val_n < val_clips:
             scored = sorted(((gain_of(sid)[0], sid) for sid in pool if val_n + int(src.n[sid]) <= val_clips * 1.15), reverse=True)
@@ -86,6 +86,16 @@ def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: 
             sid = scored[0][1]; pool.remove(sid)
             val_sources.add(sid); val_n += int(src.n[sid])
             for c, k in src_cells.xs(sid, level=unit).items(): val_cell[c] += int(k)
+    else:                                         # "typical": channels whose own strata mix is closest to the population's (L1 over cells)
+        pop = cell_total / n
+        def dist(sid):
+            h = src_cells.xs(sid, level=unit); h = h / h.sum()
+            return float((h.reindex(pop.index, fill_value=0) - pop).abs().sum())
+        pool = sorted(((dist(sid), sid) for sid in eligible if sid not in val_sources))
+        for _, sid in pool:
+            if val_n >= val_clips: break
+            if val_n + int(src.n[sid]) > val_clips * 1.15: continue
+            val_sources.add(sid); val_n += int(src.n[sid])
     return df[unit].isin(val_sources).map({True: "val", False: "train"}), val_sources
 
 
@@ -139,7 +149,9 @@ def main(argv=None) -> int:
     ap.add_argument("--subset", type=Path, default=None, help="subsets/<name>.parquet: stratify and report on this population")
     ap.add_argument("--val-unit", choices=["source", "channel", "both"], default="source",
                     help="hold out whole videos, whole channels, or (both) a channel-holdout core of --val-channel-clips filled to --val-clips with whole videos")
-    ap.add_argument("--val-channel-clips", type=int, default=10000, help="both: clips to hold out as whole channels before the video-level fill")
+    ap.add_argument("--val-channel-clips", type=int, default=6000, help="both: clips to hold out as whole channels before the video-level fill")
+    ap.add_argument("--channel-pick", choices=["typical", "deficit"], default="typical",
+                    help="channel mode: 'typical' = channels whose strata mix is closest to the population (new-channel test on representative channels); 'deficit' = fill under-represented cells")
     ap.add_argument("--max-unit-frac", type=float, default=0.03, help="channel mode: max share of the population one val channel may hold")
     ap.add_argument("--min-unit-clips", type=int, default=100, help="channel mode: min clips for a channel to be val-eligible")
     a = ap.parse_args(argv)
@@ -166,7 +178,8 @@ def main(argv=None) -> int:
         keep = keep[keep["channel_id"].notna()]
         cap = int(a.max_unit_frac * len(keep)); n_ch = a.val_clips if a.val_unit == "channel" else a.val_channel_clips
         # whole channels: one unit per main cell is enough coverage (5 would force far too many channels in)
-        split_c, val_channels = assign(keep, dims, n_ch, cap, a.main_cell_frac, min(a.min_cell_sources, 1), a.seed, unit="channel_id", min_unit_clips=a.min_unit_clips)
+        split_c, val_channels = assign(keep, dims, n_ch, cap, a.main_cell_frac, 0 if a.channel_pick == "typical" else min(a.min_cell_sources, 1), a.seed,
+                                       unit="channel_id", min_unit_clips=a.min_unit_clips, channel_pick=a.channel_pick)
         clips.loc[keep.index, "split"] = split_c.values; clips.loc[keep.index[split_c.values == "val"], "val_kind"] = "channel"
         val_units = set(val_channels); unit = "channel_id"
         if a.val_unit == "both":
