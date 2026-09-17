@@ -62,7 +62,7 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
     """`after_fps`: start only once this host's running encode for that fps axis has exited (chains passes per host)."""
     for h in hosts:
         raw, out = paths(h); tmp = HOSTS[h][1]
-        log = f"{out}/logs/encode_{h}_{axis(res, fps)}.log"
+        log = f"{out}/logs/encode_{h}_{axis(res, fps)}{log_tag}.log"
         # pull is best-effort (a missing nbstripout filter makes git refuse to touch notebooks); `fleet sync` rsyncs this tree as a fallback
         bootstrap = (f"ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {tmp} {out}/logs && "
                      f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && (git pull -q --ff-only 2>/dev/null || echo 'pull failed; using the tree as is') && "
