@@ -53,7 +53,7 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
     for h in hosts:
         raw, out = paths(h); tmp = HOSTS[h][1]
         log = f"{out}/logs/encode_{h}_{axis(res, fps)}.log"
-        bootstrap = (f"ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {tmp} {out}/logs && "
+        bootstrap = (f"export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new'; ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {tmp} {out}/logs && "
                      f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && git pull -q --ff-only && "
                      f"if [ ! -d .venv ]; then uv sync -q --group video; fi && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx265 && git log --oneline -1")
         r = ssh(h, bootstrap, timeout=1800)
