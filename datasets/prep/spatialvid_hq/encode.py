@@ -130,8 +130,10 @@ def encode_clip(args: tuple) -> dict:
         out_fps = sp["fps"] / kdec; num, den = sp["fps_frac"]
         gop = max(1, int(round(out_fps * GOP_SECONDS)))
         n = len(res_names)
-        # decimate once (exact rational rate, so the x265 rate control sees the true stored fps), then split per res
-        pre = f"fps={num}/{den * kdec}," if kdec > 1 else ""
+        # decimate once, then split per res. `select` keeps exactly frames 0, k, 2k, ... (the plain `fps` filter emits frame
+        # jk+1 for k = 3, 4 and drops the last frame, measured 2026-09-17); `setpts` puts them on the k/src grid and the
+        # trailing `fps` (a no-op on frames already on the grid) sets the stream rate so x265's CRF sees the true stored fps.
+        pre = f"select=not(mod(n\\,{kdec})),setpts=N*{kdec}/FRAME_RATE/TB,fps={num}/{den * kdec}," if kdec > 1 else ""
         fc = f"[0:v]{pre}split={n}" + "".join(f"[s{i}]" for i in range(n)) + ";" + ";".join(
             f"[s{i}]scale={RES[r][0]}:{RES[r][1]}:flags=lanczos[o{i}]" for i, r in enumerate(res_names))
         cmd = [ffmpeg, "-v", "error", "-y", "-threads", str(FFMPEG_THREADS), "-i", str(src), "-filter_complex", fc]
@@ -186,8 +188,12 @@ def claim_group(lay: Layout, gid: int, res: str, fps: int | None) -> bool:
         fd = os.open(d / f"{GROUP_FMT.format(gid=gid)}.claim", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         return False
-    os.write(fd, f"{socket.gethostname()} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n".encode()); os.close(fd)
+    os.write(fd, f"{host_name()} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n".encode()); os.close(fd)
     return True
+
+
+def host_name() -> str:
+    return os.environ.get("FLEET_HOST") or socket.gethostname()
 
 
 def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limit: int | None, ffmpeg: str, ffprobe: str,
@@ -203,7 +209,7 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
     eligible = clips.index[clips["annot_ok"]].intersection(ann.index)
     cap = min(len(eligible), limit) if limit else len(eligible)
     writers = {r: ShardWriter(lay.shard_dir(r, gid, fps), FIELD_TYPES, cap) for r in res_names}
-    stats = dict(group=gid, fps=fps, host=socket.gethostname(), eligible=int(len(eligible)), submitted=0, written=0, failed=0, not_in_index=0,
+    stats = dict(group=gid, fps=fps, host=host_name(), eligible=int(len(eligible)), submitted=0, written=0, failed=0, not_in_index=0,
                  bytes={r: 0 for r in res_names}, src_bytes=0, decimation=Counter())
     t0 = time.time(); errors: list[dict] = []
     pending: deque = deque()
@@ -267,7 +273,7 @@ def main(argv=None) -> int:
     clips = pd.read_parquet(lay.index_dir / "clips.parquet", columns=["group_id"])
     groups = parse_groups(a.groups, sorted(clips.group_id.unique().tolist()))
     print(f"encode {len(groups)} groups -> {[axis_name(r, a.fps) for r in res_names]}, {a.workers} workers x {FFMPEG_THREADS} ffmpeg threads, "
-          f"ffmpeg={ffmpeg}, host={socket.gethostname()}", flush=True)
+          f"ffmpeg={ffmpeg}, host={host_name()}", flush=True)
     lay.shards_dir.mkdir(parents=True, exist_ok=True)
     for gid in groups:
         encode_group(lay, gid, res_names, a.workers, a.limit, ffmpeg, ffprobe, a.tmp or tempfile.gettempdir(), fps=a.fps, claim=a.claim)

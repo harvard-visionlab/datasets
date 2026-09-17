@@ -53,14 +53,14 @@ def launch(hosts: list[str], fps: int | None, res: str, workers: int | None, ext
     for h in hosts:
         raw, out = paths(h)
         log = f"{out}/logs/encode_{h}_{axis(res, fps)}.log"
-        bootstrap = (f"mkdir -p {TMP} {out}/logs && "
+        bootstrap = (f"ls {raw}/videos/group_0001.tar.gz {out}/index/clips.parquet > /dev/null && mkdir -p {TMP} {out}/logs && "
                      f"if [ ! -d {REPO}/.git ]; then git clone -q {REPO_URL} {REPO}; fi && cd {REPO} && git pull -q --ff-only && "
-                     f"if [ ! -d .venv ]; then uv sync -q --group video; fi && git log --oneline -1")
-        r = ssh(h, bootstrap)
+                     f"if [ ! -d .venv ]; then uv sync -q --group video; fi && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx265 && git log --oneline -1")
+        r = ssh(h, bootstrap, timeout=1800)
         if r.returncode:
-            print(f"[{h}] bootstrap FAILED: {r.stderr.strip()[-400:]}"); continue
+            print(f"[{h}] bootstrap FAILED: {(r.stderr or r.stdout).strip()[-400:]}"); continue
         print(f"[{h}] repo at {r.stdout.strip().splitlines()[-1]}")
-        cmd = (f"cd {REPO} && nohup uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.encode --raw {raw} --out {out} "
+        cmd = (f"cd {REPO} && FLEET_HOST={h} nohup uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.encode --raw {raw} --out {out} "
                f"--res {res} --groups all --claim --tmp {TMP}" + (f" --fps {fps}" if fps else "") + (f" --workers {workers}" if workers else "")
                + (f" {extra}" if extra else "") + f" > {log} 2>&1 &")
         r = ssh(h, cmd, detach=True)
