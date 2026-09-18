@@ -66,7 +66,7 @@ def main() -> None:
     from visionlab.datasets import load
     from visionlab.datasets.video_dataset import VideoDataset
 
-    fps = None if a.fps == "native" else int(a.fps)
+    fps = "native" if a.fps == "native" else int(a.fps)      # "native" forces the un-decimated store (load() would otherwise apply default_rate_hz)
     t = time.perf_counter()
     ds: VideoDataset = load(a.dataset, split=a.split, res=a.res, fps=fps, download=False)
     print(f"{ds}  store_dir={ds.store_dir}  load {time.perf_counter() - t:.1f} s", flush=True)

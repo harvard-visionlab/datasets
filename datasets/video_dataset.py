@@ -11,8 +11,9 @@ v3 val clips rather than the population's 15,029).
     recs, t0 = ds.window_sampler(window_s=8.0, seed=0).sample(epoch=0)
     poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])      # [B, T, 7] world->camera at the true frame times
 
-Store choice: `fps=` picks a store exactly; otherwise `rate_hz` picks the sparsest store whose fps is an integer
-multiple of the rate (30 fps for 10/15/30 Hz, 15 fps for 5/15 Hz, native = fallback). Stores listed in the config
+Store choice: `fps=` picks a store exactly (`fps="native"` = the un-decimated store); otherwise `rate_hz` (default
+`default_rate_hz`) picks the sparsest store whose fps is an integer multiple of the rate (30 fps for 10/15/30 Hz, 15 fps
+for 5/15 Hz, native = fallback). Stores listed in the config
 but not built yet are skipped with a warning. Local resolution order: `$SLIPSTREAM_CACHE_DIR/<store>` (a node-local
 copy), `$VISIONLAB_DATASETS_ROOT/<tree>`, the lab's QNAP mounts (QNAP_ROOTS), then a download from S3 into
 `$SLIPSTREAM_CACHE_DIR/<store>` (only the store a job uses).
@@ -277,7 +278,10 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
     fmt = fmt or meta.get("default_fmt", "h265")
     res = meta.get("res_aliases", {}).get(str(res), res) if res else meta.get("default_res")
     split = split or meta.get("default_split", "train")
-    if rate_hz is None and fps is None:
+    native = fps == "native"                       # the un-decimated store, whatever the default rate says
+    if native:
+        fps = None
+    if rate_hz is None and fps is None and not native:
         rate_hz = meta.get("default_rate_hz")
     split_version = split_version or meta.get("default_split_version")
     cache_base = Path(configure_slipstream_cache())
