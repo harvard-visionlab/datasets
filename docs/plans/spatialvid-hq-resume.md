@@ -1,4 +1,20 @@
-# SpatialVID-HQ: where were we? (resume here) — updated 2026-09-18 11:00 (datasets2 session ended at 43 % context)
+# SpatialVID-HQ: where were we? (resume here) — updated 2026-09-18 evening (benchmark session)
+
+## 2026-09-18 evening: what changed
+
+- **machina storage**: new `~/work/DataScratch` (16 TB NVMe RAID0, no redundancy) is the node-local cache tier;
+  `SLIPSTREAM_CACHE_DIR=/home/jovyan/work/DataScratch/cache/slipstream-cache` (exported from jovyan's `.profile` +
+  `.bashrc`; not baked into the container yet). DataLocal (4 TB SATA) keeps only legacy imagenet/ffcv trees; the old
+  `DataLocal/.cache/slipstream` imagenet caches were migrated to the new cache dir. All three 456x256 stores
+  (native / 30 fps / 15 fps) are staged there. See the `/workstation` skill for the post-reboot pitfalls fixed today
+  (QNAP exactitude unmounted, container recreate lost `s5cmd`/`ffmpeg`, `.bashrc` vs `.profile`, stray `visionlab/` pycache dir).
+- **Count discrepancy resolved** (`f1b4286`): the v3 split table labels every index clip (365,362 rows, 66 `excluded`,
+  `in_subset` flag); the report's 15,029 val clips are the population. `load()` now applies `default_subset`
+  (`person_carried_v0`) unless `subset="all"`; `make_splits` reports state table rows vs population; the on-disk
+  `v3.report.md` (QNAP + S3) carries the note. Card must say the same.
+- **Benchmark tool**: `benchmarks/bench_spatialvid_window.py` (multi-epoch, `--drop-cache` via `posix_fadvise`, page-cache
+  residency per epoch, `--no-local-cache` to read off the QNAP mount). Results → design doc §3 once the runs finish
+  (log: `DataScratch/tmp/bench_spatialvid.log` on machina).
 
 Read this first, then `spatialvid-hq-subsets-and-loader.md` (design + all measurements) and
 `spatialvid-hq-next-steps.md` (older plan, §2 cards still valid). Prep pipeline docs:
@@ -14,7 +30,7 @@ Fleet access (ssh, container, paths, rules): the global `/workstation` skill.
 | **split v3** = train / val / test | `splits/v3.parquet` + report, S3 | train 186,710 · val 15,029 (whole held-out videos of channels in train, ≤ 1.2 pp off train per stratum) · test 11,364 (7 whole channels never in train; walk-only; the transfer metric). `make_splits --val-unit three --test-clips 11000 --val-clips 15000 --max-source-clips 200 --max-unit-frac 0.015` |
 | **registry** `load("spatialvid-hq", split=, subset=, rate_hz=, res=, fps=, where=, channel_cap=)` → `VideoDataset` | `datasets/video_dataset.py`, `_configs/spatialvid_hq.py`, `tests/test_video_registry.py` | done; `rate_hz` picks the sparsest store whose fps divides it (15→15 fps, 10/30→30 fps, 5→15 fps); local order `$SLIPSTREAM_CACHE_DIR/<store>` → QNAP → S3 download of that store only; `ds.clips`, `ds.indices`, `ds.window_sampler(window_s)`, `ds.poses_at(rec, t_sec)` (batched, time-based). `datasets-cli list` shows stores/splits/subsets. |
 | slipstream 0.7.0 | tag `v0.7.0` = 6e41138; pinned in `pyproject.toml`/`uv.lock` | done; machina container venv synced to 0.7.0 on 2026-09-18 (fleet-host venvs still 0.6.0: `uv sync --group video` there when next used) |
-| local-SSD copy on machina | `~/work/DataLocal/slipstream-cache/spatialvid-hq-h265-456x256` (native, 169 GB) | done; set `SLIPSTREAM_CACHE_DIR=~/work/DataLocal/slipstream-cache`. **Not yet copied: the 456x256-15fps store** (167 GB; ~245 GB free there before) |
+| node-local copies on machina | `~/work/DataScratch/cache/slipstream-cache/spatialvid-hq-h265-456x256{,-30fps,-15fps}` (169 / 176 / 167 GB) | done 2026-09-18; `SLIPSTREAM_CACHE_DIR=/home/jovyan/work/DataScratch/cache/slipstream-cache` (in jovyan's `.profile`) |
 | end-to-end demo | `/tmp/demo_e2e.py` in the machina container (scratch) | ran 2026-09-17 on the native store: `load` 3.7 s, `[8,120,3,224,398]` batches with `video_t_sec`/`video_rec`, `poses_at` → `[8,120,7]`, seed-reproducible. Not yet run against the 15 fps store; not yet a notebook |
 | fleet tooling | `datasets/prep/spatialvid_hq/{encode,fleet,status,finish}.py` | `fleet.py launch/sync/finish/status/ps/stop/tail`, claim-based load balancing, `encode --retry-failed` patch pass, VFR fallback. No jobs running as of 2026-09-18 11:00 |
 
@@ -39,8 +55,10 @@ Fleet access (ssh, container, paths, rules): the global `/workstation` skill.
 
 ## Next work items, in order
 
-1. Copy `stores/spatialvid-hq-h265-456x256-15fps` to machina's `~/work/DataLocal/slipstream-cache/` (check free space first; retire the native copy if tight).
-2. Benchmark `DecodeVideoWindow` (T=120, 15 Hz, resize 224, 64 workers, OMP=1, warm) on the 15 fps vs 30 fps vs native store — `slipstream/benchmarks/bench_video_window.py` or the demo script; record in the design doc §3.
+1. ~~Stage the 456x256 stores on machina~~ done (DataScratch).
+2. Benchmark `DecodeVideoWindow` (T=120, 15 Hz, resize 224, 64 workers, OMP=1) on the 15 fps vs 30 fps vs native store,
+   3 epochs each (cold disk → warm page cache), plus the 15 fps store read off the QNAP CIFS mount as the cluster proxy —
+   `benchmarks/bench_spatialvid_window.py`; record in the design doc §3.
 3. Turn `/tmp/demo_e2e.py` into `notebooks/spatialvid_hq_loader_demo.ipynb` (seed-reproducible batch + trajectories, cold vs warm throughput).
 4. Per-store normalization stats → `metadata["stats"]` in `_configs/spatialvid_hq.py`.
 5. Dataset card (next-steps §2): population definition, v3 split, channel concentration, exclusions, fps stores.

@@ -73,10 +73,11 @@ def main() -> None:
 
     window_s = a.T / a.rate
     recs, t0 = ds.window_sampler(window_s, seed=a.seed).sample(0)
+    n_elig = len(recs)
     rng = np.random.default_rng(a.seed)
-    pick = np.sort(rng.choice(len(recs), min(a.n_clips, len(recs)), replace=False))
+    pick = np.sort(rng.choice(n_elig, min(a.n_clips, n_elig), replace=False))
     recs, t0 = recs[pick], t0[pick]
-    print(f"{len(recs):,} windows of {window_s:g} s from {len(ds):,} clips (eligible {len(pick):,}); T={a.T} rate={a.rate:g}", flush=True)
+    print(f"{len(recs):,} windows of {window_s:g} s picked from {n_elig:,} eligible of {len(ds):,} clips; T={a.T} rate={a.rate:g}", flush=True)
 
     stage = DecodeVideoWindow(T=a.T, rate_hz=a.rate, seed=a.seed, t0_key="t0", device=a.device, num_workers=a.workers,
                               num_ffmpeg_threads=1, resize=a.resize)
