@@ -321,13 +321,15 @@ def encode_group(lay: Layout, gid: int, res_names: list[str], workers: int, limi
     return stats
 
 
-def patch_pending(lay: Layout, res: str, fps: int | None, n_groups: int = 74) -> tuple[list[int], list[int]]:
-    """(groups without a main shard yet, finished groups whose failures are not yet covered by a finished patch shard)."""
+def patch_pending(lay: Layout, res: str, fps: int | None, n_groups: int = 74, stats_res: str | None = None) -> tuple[list[int], list[int]]:
+    """(groups without a main shard yet, finished groups whose failures are not yet covered by a finished patch shard).
+    Stats live under the FIRST resolution's axis dir (`stats_res`, default RES[0]); shards are checked under `res`."""
     missing_groups, uncovered = [], []
+    stats_dir = lay.shard_axis_dir(stats_res or list(RES)[0], fps) / "stats"
     for gid in range(1, n_groups + 1):
         if not (shard_path(lay, res, gid, fps) / "_shard_manifest.json").exists():
             missing_groups.append(gid); continue
-        st = lay.shard_axis_dir(res, fps) / "stats" / f"{GROUP_FMT.format(gid=gid)}.stats.json"
+        st = stats_dir / f"{GROUP_FMT.format(gid=gid)}.stats.json"
         failed = json.loads(st.read_text()).get("failed", 0) if st.exists() else 0
         if failed and missing_clips(lay, gid, res, fps):       # covered = every eligible clip is in the main or the patch shard
             uncovered.append(gid)

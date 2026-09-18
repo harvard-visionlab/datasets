@@ -38,7 +38,8 @@ def main(argv=None) -> int:
             if done_marker.exists():
                 pending.discard((res, fps)); continue
             if not (store / "store_manifest.json").exists():
-                missing_groups, uncovered = patch_pending(lay, res, fps, a.groups)
+                missing_groups, uncovered = patch_pending(lay, res, fps, a.groups, stats_res=resolve_res(a.res.split(",")[0]))
+                # 2026-09-17: without stats_res the 456x256-15fps store merged 6 clips short (stats are only written under the first res)
                 if missing_groups or uncovered:
                     if not missing_groups:
                         log(f"[{ax}] all {a.groups} shards present but {len(uncovered)} groups have uncovered failures {uncovered[:8]} -> waiting for the patch pass")
