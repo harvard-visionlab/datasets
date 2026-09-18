@@ -1,53 +1,56 @@
-# SpatialVID-HQ: where were we? (resume here) — updated 2026-09-17 (evening session, datasets2)
+# SpatialVID-HQ: where were we? (resume here) — updated 2026-09-18 11:00 (datasets2 session ended at 43 % context)
 
 Read this first, then `spatialvid-hq-subsets-and-loader.md` (design + all measurements) and
 `spatialvid-hq-next-steps.md` (older plan, §2 cards still valid). Prep pipeline docs:
 `datasets/prep/spatialvid_hq/README.md`. Decisions history: `slipstream/experiments/spatialvid_inspection/DECISIONS.md`.
+Fleet access (ssh, container, paths, rules): the global `/workstation` skill.
 
-## State (all committed to `main`, data on QNAP Flash `.../VideoDatasets/SpatialVID-HQ-slipstream/`, index + splits + subsets on S3)
+## State — everything below is done, committed to `main`, data on QNAP Flash `.../VideoDatasets/SpatialVID-HQ-slipstream/`, mirrored on S3 `s3://visionlab-datasets/slipstream-cache/spatialvid-hq/`
 
 | artefact | where | status |
 | --- | --- | --- |
-| h265 stores 640x360 / 456x256, native fps, 365,296 clips | `stores/`, S3 | done, verified |
-| **fps stores** `…-{640x360,456x256}-{30,15}fps` (integer decimation, exact timestamps, `src_fps`/`src_num_frames` fields) | `stores/`, S3 | **done 2026-09-17 21:25**: all four stores merged with the full 365,296 clips (main shards + patch shards; 120 VFR/odd-rate clips patched at 30 fps, 6 at 15 fps), integrity OK, synced to S3. Sizes: 640x360 311 GB (30) / 295 GB (15); 456x256 176 GB (30) / 167 GB (15). Fleet cost ≈ 55 h (30) + 40 h (15) host-time over ~19 h wall. `load(..., rate_hz=15)` now picks the 15 fps store. Verified 2026-09-18: all four stores have the native clip set; 200 random 15 fps records match `src_fps / k` pts grids; store pick 15/10/30/5 Hz → 15/30/30/15 fps. (456x256-15fps first merged 6 clips short — finisher read patch stats under the wrong res — re-merged + re-synced 2026-09-18 10:57.) Lessons: rate / frame-count asserts must tolerate VFR sources (fallback = `select` only); a 0-record patch shard has a column-less parquet; patch stats live under the first res only. |
-| YouTube metadata, channel review (129/136), clip carrier | `index/` | done |
-| training population `person_carried_v0` | `subsets/` + `.report.md` | done: 213,103 clips (walk 187,713 / rig 25,390), 644 h, 82 channels |
-| **split v3 (adopted)** = train / val / test | `splits/v3.parquet` + report, S3 | **done**: train 186,710 · val 15,029 (whole held-out videos of channels in train, ≤ 1.2 pp off train per stratum) · test 11,364 (7 whole channels never in train: 4K Nature and City Walks, The Flying Dutchman, Justwalk, TokyoNinjaWalk, Drifted Films, Hui Chen, Trillionex Travel; walk-only, Cloudy-heavy — the transfer metric, reported separately). `make_splits --val-unit three --test-clips 11000 --val-clips 15000 --max-source-clips 200 --max-unit-frac 0.015`. v2a–g candidates kept for reference, not used. |
-| **registry**: `load("spatialvid-hq", split=, subset=, rate_hz=, res=, fps=, where=, channel_cap=)` → `VideoDataset` | `datasets/video_dataset.py`, `_configs/spatialvid_hq.py`, tests `tests/test_video_registry.py` | **done** (13 tests). Store pick: sparsest store whose fps divides `rate_hz`, unbuilt stores skipped with a warning (so today 15 Hz → native store; → 15 fps store once synced). Local order: `$SLIPSTREAM_CACHE_DIR/<store>` → QNAP mount → S3 download of that store only. `ds.window_sampler`, `ds.poses_at(rec, t_sec)` (batched, time-based, uses `src_fps`). |
-| slipstream 0.7.0 | `origin/main` = 6e41138, tag `v0.7.0` (slipstream2, 2026-09-17) | **done**; pinned here (`pyproject.toml` git rev `v0.7.0`, `uv.lock` updated, local env synced, 78 tests pass). **machina container venv still has 0.6.0**: run `uv sync --group video` there *after* the fleet encode finishes (encode.py imports slipstream.cache lazily; do not swap packages under running encoders). Until then `PYTHONPATH=/tmp/ss` for loader work on machina. |
-| local-SSD copy of the native 456x256 store on machina | `~/work/DataLocal/slipstream-cache/spatialvid-hq-h265-456x256` (169 GB) | done; `SLIPSTREAM_CACHE_DIR=~/work/DataLocal/slipstream-cache` makes `load()` use it. **todo:** copy the 456x256-15fps store there too (167 GB; machina DataLocal had ~245 GB free) and retire the native copy if space is tight |
-| demo (registry → anchors → `DecodeVideoWindow` → `poses_at`) | `/tmp/demo_e2e.py` in the machina container (scratch; to become `notebooks/spatialvid_hq_loader_demo.ipynb`) | run 2026-09-17 while the host encoded; see the session summary / re-run for numbers |
+| **six h265 stores** `spatialvid-hq-h265-{640x360,456x256}[-{30,15}fps]`, 365,296 clips each | `stores/`, S3 | done + verified 2026-09-18 (clip sets identical; fps/`src_fps`/pts grids checked). Sizes: native 296 / 169 GB; 30 fps 311 / 176 GB; 15 fps 295 / 167 GB. fps stores: integer decimation k (60→30/15, 30→15, 50→50/16.7, 24→24), exact timestamps, fields `src_fps`, `src_num_frames`; `annot_frame_idx` indexes *source* frames. |
+| training population `person_carried_v0` | `subsets/` + `.report.md`, S3 | 213,103 clips (walk 187,713 / rig 25,390), 644 h, 82 channels |
+| **split v3** = train / val / test | `splits/v3.parquet` + report, S3 | train 186,710 · val 15,029 (whole held-out videos of channels in train, ≤ 1.2 pp off train per stratum) · test 11,364 (7 whole channels never in train; walk-only; the transfer metric). `make_splits --val-unit three --test-clips 11000 --val-clips 15000 --max-source-clips 200 --max-unit-frac 0.015` |
+| **registry** `load("spatialvid-hq", split=, subset=, rate_hz=, res=, fps=, where=, channel_cap=)` → `VideoDataset` | `datasets/video_dataset.py`, `_configs/spatialvid_hq.py`, `tests/test_video_registry.py` | done; `rate_hz` picks the sparsest store whose fps divides it (15→15 fps, 10/30→30 fps, 5→15 fps); local order `$SLIPSTREAM_CACHE_DIR/<store>` → QNAP → S3 download of that store only; `ds.clips`, `ds.indices`, `ds.window_sampler(window_s)`, `ds.poses_at(rec, t_sec)` (batched, time-based). `datasets-cli list` shows stores/splits/subsets. |
+| slipstream 0.7.0 | tag `v0.7.0` = 6e41138; pinned in `pyproject.toml`/`uv.lock` | done; machina container venv synced to 0.7.0 on 2026-09-18 (fleet-host venvs still 0.6.0: `uv sync --group video` there when next used) |
+| local-SSD copy on machina | `~/work/DataLocal/slipstream-cache/spatialvid-hq-h265-456x256` (native, 169 GB) | done; set `SLIPSTREAM_CACHE_DIR=~/work/DataLocal/slipstream-cache`. **Not yet copied: the 456x256-15fps store** (167 GB; ~245 GB free there before) |
+| end-to-end demo | `/tmp/demo_e2e.py` in the machina container (scratch) | ran 2026-09-17 on the native store: `load` 3.7 s, `[8,120,3,224,398]` batches with `video_t_sec`/`video_rec`, `poses_at` → `[8,120,7]`, seed-reproducible. Not yet run against the 15 fps store; not yet a notebook |
+| fleet tooling | `datasets/prep/spatialvid_hq/{encode,fleet,status,finish}.py` | `fleet.py launch/sync/finish/status/ps/stop/tail`, claim-based load balancing, `encode --retry-failed` patch pass, VFR fallback. No jobs running as of 2026-09-18 11:00 |
 
-## Decisions taken 2026-09-17 (user)
+## Decisions taken (user, 2026-09-17)
 
-1. Split: **three-way** (test = whole typical channels, val = whole videos stratified to the remaining population) instead of v2f's single val. Adopted as v3.
-2. slipstream 0.7.0: merged + tagged v0.7.0, pinned here. Pose interpolation is *not* a slipstream transform: the stage returns `video_t_sec`, `visionlab.datasets` interpolates (`VideoDataset.poses_at`, `video.interpolate_poses`).
-3. fps stores: **30 fps first, then 15 fps, both resolutions** (4 stores); resolution and rate decided separately; 224p store not now. Decimation rule in `common.decimation_factor`: k = round(src/F) lowered until src/k ≥ F − 0.1 (60→30, 50→50, 24→24 at F=30; 60→15, 50→16.7, 30→15, 24→24 at F=15). Filter `select+setpts+fps` (the plain `fps` filter emits frame jk+1 for k=3,4 — measured).
-4. Window default for the first run: 4 s + 4 s at 15 Hz (T = 120).
+1. Split is **three-way** (v3): test = whole typical channels, val = whole videos stratified to the remaining population.
+2. Pose interpolation lives in `visionlab.datasets` (`VideoDataset.poses_at`, `video.interpolate_poses`), not in slipstream; the stage returns true frame times.
+3. fps is a store axis next to res; 30 and 15 fps built for both resolutions; no 224p store for now.
+4. First-run window default: 4 s + 4 s at 15 Hz (T = 120; 145k clips ≥ 8 s, 87 % of frames).
+5. Stores must contain the **full** clip set (no dropped clips) — hence the patch pass.
 
 ## Findings to remember (details and tables in the design doc)
 
-- 5 Hz is too slow, 10 Hz threshold, 15 Hz good → video store canonical; rate is a loader parameter; poses interpolated to the true frame times.
-- torchcodec `get_frames_played_at(t)` returns the frame *playing at* t (pts ≤ t < pts + dur, i.e. floor, not nearest); harmless because the true pts come back and poses use them (demo: t0 2.866 → first frame pts 2.833 at 30 fps).
-- Demo 2026-09-17 (`/tmp/demo_e2e.py`, machina while encoding, 8 workers): `load` 3.7 s from the local-SSD store; val 15,029 clips → 10,210 anchors ≥ 8 s; `[8,120,3,224,398]` uint8 batches with `video_t_sec`, `video_rec`; `poses_at` → `[8,120,7]`; seed-reproducible across loaders; `channel_cap=0.05` on train-walk → 134,312 clips, top channel 6.1 %.
-- x265 CRF depends on the stream frame rate (same CRF at 30 fps spends ~2× bytes per frame vs 60 fps); the fps store bytes are ~80 % of the native store, not 50 %.
-- `torch.set_num_threads(1)` / `OMP_NUM_THREADS=1` in every process that hosts `DecodeVideoWindow` (DDP rule).
-- CIFS page cache is per open-file holder: `warmup_cache()` per process start or stage the store to node-local disk.
-- Fleet hosts (thrace, vesper, leeloo, stelline) run docker with `userns-remap`: a bare `docker exec jupyter-grez72` is **root-in-namespace** (host uid 100000) and owns nothing — always `docker exec -u jovyan`. (2026-09-17 I ran as root there and wrongly concluded 'no GitHub key' / 'DataLocal read-only'; both are fine as jovyan.) jovyan-in-container = host uid 101000:100100; the datasets repo on those hosts was host-`george`-owned (and my host-side rsync made it worse) → chowned to 101000:100100 on 2026-09-17. machina has no userns (exec = jovyan) and its own mount layout: QNAP Flash at `~/work/DataExactitudeFlash` vs `~/work/DataRemote/qnap/exactitude/Flash` on the fleet. The 30/15 fps encoders launched on 2026-09-17 on the fleet run as ns-root (harmless: shards/claims/logs live on the uid-mapped CIFS; scratch `/tmp/spatialvid`); future launches run as jovyan with scratch in `DataLocal`.
-- Channel holdout with 82 heavy-tailed channels: pick *typical* channels (closest strata mix), cap 1.5 % of clips each; video-level val needs `--max-source-clips 200` so long walking videos are eligible.
+- 5 Hz too slow, 10 Hz threshold, 15 Hz good → video store canonical; rate is a loader parameter.
+- Decode cost per window follows the *stored* fps; a 15 fps store should ≈ halve `DecodeVideoWindow` cost vs 60 fps sources (measured raw: 200 → 94 ms per 8 s window). **Not yet benchmarked end-to-end.**
+- x265 CRF scales with stream frame rate: fps stores are ~80 % of native bytes, not 50 %.
+- torchcodec `get_frames_played_at(t)` = frame playing at t (floor, not nearest); harmless since true pts return.
+- `OMP_NUM_THREADS=1` / `torch.set_num_threads(1)` in every process hosting the decode stage (DDP rule). CIFS page cache is per open-file holder → warm per process or stage to local SSD.
+- ffmpeg decimation: `select=not(mod(n,k)),setpts=N*k/FRAME_RATE/TB,fps=src/k` is exact; the plain `fps` filter emits frame jk+1 for k=3,4. VFR sources (~0.03 %) need the `select`-only fallback. Exact rate/frame-count asserts must tolerate them.
+- Channel holdout with heavy-tailed channels: pick *typical* channels (closest strata mix), cap 1.5 % each; val needs `--max-source-clips 200`.
+- Fleet: always `docker exec -u jovyan` (fleet hosts use userns-remap; bare exec = root-in-ns). Details and paths in `/workstation`.
 
 ## Next work items, in order
 
-1. ~~fps stores~~ done. Stage the 456x256-15fps store to machina's local SSD; benchmark `DecodeVideoWindow` native vs 30 vs 15 fps store (expect ≈2× at 15 fps).
-2. `uv sync --group video` on machina + fleet hosts once encodes finish (slipstream 0.7.0); move the demo into a notebook with throughput cold vs warm, local SSD vs CIFS, native vs 30 fps vs 15 fps store.
-3. Per-store normalization stats (`metadata["stats"][store]`), `datasets-cli list` support for video stores.
-4. Dataset card (next-steps §2): population definition, v3 split, channel concentration, exclusions, fps stores.
-5. Later: per-clip stabilisation / gait statistics; VLM audit sample for carrier precision; RA-4M prep (`datasets/prep/relate_anything_4M/SEED.md`).
+1. Copy `stores/spatialvid-hq-h265-456x256-15fps` to machina's `~/work/DataLocal/slipstream-cache/` (check free space first; retire the native copy if tight).
+2. Benchmark `DecodeVideoWindow` (T=120, 15 Hz, resize 224, 64 workers, OMP=1, warm) on the 15 fps vs 30 fps vs native store — `slipstream/benchmarks/bench_video_window.py` or the demo script; record in the design doc §3.
+3. Turn `/tmp/demo_e2e.py` into `notebooks/spatialvid_hq_loader_demo.ipynb` (seed-reproducible batch + trajectories, cold vs warm throughput).
+4. Per-store normalization stats → `metadata["stats"]` in `_configs/spatialvid_hq.py`.
+5. Dataset card (next-steps §2): population definition, v3 split, channel concentration, exclusions, fps stores.
+6. Later: per-clip stabilisation / gait statistics from poses; VLM audit sample for carrier precision; RA-4M prep (`datasets/prep/relate_anything_4M/SEED.md`, questions listed there).
 
 ## How to resume, mechanically
 
-- Repo tools: `datasets/prep/spatialvid_hq/{make_splits,encode,merge,status,fleet,finish}.py`; run with
-  `uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.<tool> --out <tree>` inside the `jupyter-grez72` container
-  (`ssh machina; docker exec -it jupyter-grez72 bash`), repo at `~/work/GitHub/datasets`. `fleet.py` runs from any machine with ssh to the hosts.
-- slipstream branch checkout for the loader: `/tmp/ss` in the machina container (`PYTHONPATH=/tmp/ss`).
+- Repo tools: `datasets/prep/spatialvid_hq/*.py`; run with `uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.<tool> --out <tree>`
+  inside the `jupyter-grez72` container on machina as jovyan (`ssh machina docker exec -u jovyan jupyter-grez72 bash -lc '...'`), repo `~/work/GitHub/datasets`.
+  Tree on machina: `~/work/DataExactitudeFlash/DataSets/VideoDatasets/SpatialVID-HQ-slipstream` (fleet hosts: `~/work/DataRemote/qnap/exactitude/Flash/DataSets/VideoDatasets/...`).
+- `fleet.py` runs from the Mac (ssh to the hosts); `fleet.py status --fps 30|15` for shard/patch state.
+- Scratch scripts from the last session in the machina container: `/tmp/demo_e2e.py`, `/tmp/verify_fps_store.py`, `/tmp/verify_store.py`.
 - Review page DB (channel labels): https://claude.ai/code/artifact/b8e6e6d8-f9c5-477a-94e0-2a5fbfe698cd, collection `labels`.
