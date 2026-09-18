@@ -4,6 +4,10 @@
     ds = load("spatialvid-hq", split="train", subset="person_carried_v0", rate_hz=15)
     ds.cache              # slipstream OptimizedCache of the chosen store (h265 bytes per clip)
     ds.clips              # DataFrame of the selected clips (subset ∩ split ∩ where ∩ channel_cap) with record_idx
+
+`subset` defaults to the config's `default_subset` (spatialvid-hq: person_carried_v0, the training population); the
+split table itself labels *every* store clip, so `subset="all"` gives the whole store's split members (e.g. all 16,932
+v3 val clips rather than the population's 15,029).
     recs, t0 = ds.window_sampler(window_s=8.0, seed=0).sample(epoch=0)
     poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])      # [B, T, 7] world->camera at the true frame times
 
@@ -300,6 +304,10 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
         raise KeyError(f"unknown split version {split_version!r}; available: {sorted(config.splits)}")
     split_df = pd.read_parquet(resolve_file(f"splits/{split_version}.parquet", config.splits[split_version], tree, cache_base))
     subset_df = None
+    if subset is None:
+        subset = meta.get("default_subset")          # the population; subset="all" = every clip in the store
+    if subset == "all":
+        subset = None
     if subset is not None:
         if subset not in config.subsets:
             raise KeyError(f"unknown subset {subset!r}; available: {sorted(config.subsets)}")

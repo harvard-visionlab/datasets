@@ -14,6 +14,7 @@ def test_config_is_video():
     cfg = get_config("spatialvid-hq")
     assert cfg.is_video and not get_config("imagenet1k").is_video
     assert "v3" in cfg.splits and "person_carried_v0" in cfg.subsets
+    assert cfg.metadata["default_subset"] in cfg.subsets          # load() filters to the population unless subset="all"
 
 
 @pytest.mark.parametrize("rate,expected_fps", [(15, [15, 30, None]), (10, [30, None]), (5, [15, 30, None]), (30, [30, None]), (7.5, [15, 30, None]), (60, [None])])

@@ -106,10 +106,14 @@ def assign(df: pd.DataFrame, dims: list[str], val_clips: int, max_source_clips: 
     return df[unit].isin(val_sources).map({True: "val", False: "train"}), val_sources
 
 
-def report(df: pd.DataFrame, dims: list[str], path: Path, version: str) -> None:
+def report(df: pd.DataFrame, dims: list[str], path: Path, version: str, n_table: int | None = None) -> None:
     splits = [s for s in ("train", "val", "test") if (df.split == s).any()]
     hold = [s for s in splits if s != "train"]
     lines = [f"# split {version}", "", f"clips: {len(df):,}  sources: {df.source_id.nunique():,}" + (f"  channels: {df.channel_id.nunique()}" if "channel_id" in df else ""), ""]
+    if n_table is not None and n_table != len(df):
+        lines += [f"The split table has {n_table:,} rows (every index clip, `in_subset` marks the population); all counts "
+                  f"below are the population ({len(df):,} clips). `load()` applies the subset by default; `subset=\"all\"` "
+                  f"returns every store clip of a split.", ""]
     vc = df["split"].value_counts(); lines.append("| split | clips | % | sources |"); lines.append("| --- | ---: | ---: | ---: |")
     for s in splits:
         lines.append(f"| {s} | {vc.get(s, 0):,} | {vc.get(s, 0) / len(df) * 100:.1f} | {df.loc[df.split == s, 'source_id'].nunique():,} |")
@@ -228,7 +232,7 @@ def main(argv=None) -> int:
     out = clips[list(dict.fromkeys(cols))]
     out.to_parquet(lay.splits_dir / f"{a.version}.parquet", index=False)
     pop = out.loc[keep.index] if a.subset is not None else out[out.split != "excluded"]
-    report(pop, dims, lay.splits_dir / f"{a.version}.report.md", a.version)
+    report(pop, dims, lay.splits_dir / f"{a.version}.report.md", a.version, n_table=len(clips))
     if a.subset is not None:
         print("population (subset):", pop.split.value_counts().to_dict(), "| all clips:", out.split.value_counts().to_dict())
     if a.val_unit != "source":

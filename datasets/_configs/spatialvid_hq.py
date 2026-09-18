@@ -33,6 +33,9 @@ register(DatasetConfig(
         "tree": "SpatialVID-HQ-slipstream",          # directory name under the lab's shared DataSets/VideoDatasets tree
         "default_fmt": "h265", "default_res": "456x256", "default_split": "train", "default_split_version": "v3",
         "default_rate_hz": 15,
+        # The split table labels every index clip (365,362 rows incl. 66 `excluded`); the training *population* is the
+        # subset (`in_subset`). load() applies it by default; pass subset="all" for the whole store.
+        "default_subset": "person_carried_v0",
         "res_aliases": {"640": "640x360", "360p": "640x360", "456": "456x256", "256p": "456x256"},
         "num_records": 365_296,
         "num_train": 186_710, "num_val": 15_029, "num_test": 11_364,           # person_carried_v0 ∩ v3
