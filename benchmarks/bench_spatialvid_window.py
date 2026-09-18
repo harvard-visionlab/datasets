@@ -81,7 +81,9 @@ def main() -> None:
     stage = DecodeVideoWindow(T=a.T, rate_hz=a.rate, seed=a.seed, t0_key="t0", device=a.device, num_workers=a.workers,
                               num_ffmpeg_threads=1, resize=a.resize)
     ahead = max(3, -(-stage.num_workers // a.batch_size))
-    loader = SlipstreamLoader(ds.cache, batch_size=a.batch_size, shuffle=True, seed=a.seed, drop_last=True, indices=recs,
+    from slipstream.dataset import SlipstreamDataset
+    sds = SlipstreamDataset(local_dir=str(ds.store_dir))          # the loader wants a dataset wrapper, not the OptimizedCache
+    loader = SlipstreamLoader(sds, batch_size=a.batch_size, shuffle=True, seed=a.seed, drop_last=True, indices=recs,
                               sample_data={"t0": t0}, batches_ahead=ahead, image_field="video", pipelines={"video": [stage]},
                               verbose=False)
     gb = None
