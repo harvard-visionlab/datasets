@@ -56,9 +56,9 @@ Fleet access (ssh, container, paths, rules): the global `/workstation` skill.
 ## Next work items, in order
 
 1. ~~Stage the 456x256 stores on machina~~ done (DataScratch).
-2. Benchmark `DecodeVideoWindow` (T=120, 15 Hz, resize 224, 64 workers, OMP=1) on the 15 fps vs 30 fps vs native store,
-   3 epochs each (cold disk → warm page cache), plus the 15 fps store read off the QNAP CIFS mount as the cluster proxy —
-   `benchmarks/bench_spatialvid_window.py`; record in the design doc §3.
+2. ~~Benchmark~~ done 2026-09-18 (design doc §3): NVMe warm 163 / 139 / 121 windows/s for 15 fps / 30 fps / native
+   (decode-bound, cold ≈ warm); off the QNAP CIFS mount epoch 1 = 84, epochs 2+ = 163 (×1.95, page cache).
+   `load(..., fps="native")` added (`6d99f0e`) because `default_rate_hz` otherwise routes to the 15 fps store.
 3. Turn `/tmp/demo_e2e.py` into `notebooks/spatialvid_hq_loader_demo.ipynb` (seed-reproducible batch + trajectories, cold vs warm throughput).
 4. Per-store normalization stats → `metadata["stats"]` in `_configs/spatialvid_hq.py`.
 5. Dataset card (next-steps §2): population definition, v3 split, channel concentration, exclusions, fps stores.

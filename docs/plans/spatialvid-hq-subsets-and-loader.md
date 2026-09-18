@@ -95,6 +95,27 @@ is ~64 windows/s; at T = 120 and full 456x256 that is 5 GB/s of uint8 frames, so
 the training resolution is part of the design, not an option. Target for the stage: ≥ 100 windows/s at T = 120
 with resize to the model input, CPU or one GPU.
 
+**Measured 2026-09-18 on machina** (`benchmarks/bench_spatialvid_window.py`, slipstream 0.7.0, 64 CPU workers,
+`OMP_NUM_THREADS=1`, T = 120 at 15 Hz, resize 224, B = 8, 8,000 fixed seeded windows of the v3 val population per epoch,
+~4.5 GB of h265 per epoch, page cache evicted with `posix_fadvise(DONTNEED)` before epoch 1, residency checked 0.00 → 1.00):
+
+| store (456x256) | source | epoch 1 (cold) windows/s | epochs 2–3 (warm) | warm/cold |
+| --- | --- | ---: | ---: | ---: |
+| 15 fps | DataScratch NVMe RAID0 | 155 | 163 | 1.05 |
+| 30 fps | DataScratch NVMe RAID0 | 135 | 139 | 1.03 |
+| native (24–60 fps) | DataScratch NVMe RAID0 | 118 | 121 | 1.02 |
+| 15 fps | QNAP CIFS mount, one process | 84 | 163 | 1.95 |
+
+Reading: (a) on node-local NVMe the stage is decode-bound at every fps; the store's frame rate sets the ceiling
+(native 121 → 30 fps 139 → 15 fps 163 windows/s, +35 % for 15 fps; less than the raw per-core 2× because the
+decimated streams are 73–81 % of the bytes and resize/copy are fps-independent). (b) The first epoch off the CIFS mount
+runs at half speed and the warm epochs match NVMe exactly: the page cache, not the network, feeds epochs 2+, so on a
+cluster with networked storage expect the epoch-1 penalty to scale with the mount's streaming rate (`warmup_cache`
+moves it ahead of training) and the stage to be the limit thereafter; the residency check is the diagnostic. (c) Warm
+throughput is the same for `SLIPSTREAM_CACHE_DIR` on NVMe and for an in-process warm mount, so staging buys only the
+first epoch on a single node; on multi-process/DDP jobs it also removes the per-process cold start (§ above).
+Default store for training stays 15 fps at 15 Hz; 30 fps when 10 Hz or 30 Hz windows are needed.
+
 The optional on-the-fly `VideoStore.frames_at_seconds` path stays for notebooks and eval at 640x360.
 
 ## 4. Loader API (implemented 2026-09-17: `datasets/video_dataset.py`, config `_configs/spatialvid_hq.py`)
