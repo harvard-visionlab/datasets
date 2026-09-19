@@ -8,8 +8,10 @@
 `subset` defaults to the config's `default_subset` (spatialvid-hq: person_carried_v0, the training population); the
 split table itself labels *every* store clip, so `subset="all"` gives the whole store's split members (e.g. all 16,932
 v3 val clips rather than the population's 15,029).
-    loader = SlipstreamLoader(ds, indices=ds.window_sampler(8.0).recs, pipelines={"video": [DecodeVideoWindow(...)]}, ...)
-    poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])      # [B, T, 7] world->camera at the true frame times
+    loader = SlipstreamLoader(ds, indices=ds.window_sampler(8.0).recs, pipelines={"video": [DecodeVideoWindow(...)]},
+                              after_batch_transforms=[ds.ego_motion_transform()], ...)
+    batch["video"], batch["poses"], batch["ego"]                        # [B,T,3,H,W] uint8, [B,T,7], [B,T-1,6]
+    poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])      # the same poses, by hand
 
 Store choice: `fps=` picks a store exactly (`fps="native"` = the un-decimated store); otherwise `rate_hz` (default
 `default_rate_hz`) picks the sparsest store whose fps is an integer multiple of the rate (30 fps for 10/15/30 Hz, 15 fps
@@ -234,10 +236,41 @@ class VideoDataset:
         poses = self.poses_at(recs, t_sec)
         return poses, ego_motion(poses)
 
+    def ego_motion_transform(self, field: str = "video", poses_key: str = "poses", ego_key: str = "ego",
+                             pad_first: bool = False) -> "EgoMotionTransform":
+        """A `SlipstreamLoader(after_batch_transforms=[...])` callable that adds `poses` [B, T, 7] and `ego` [B, T-1, 6]
+        (or [B, T, 6] zero-padded at frame 0 with `pad_first`) to every batch, from `<field>_rec` / `<field>_t_sec`."""
+        return EgoMotionTransform(self, field, poses_key, ego_key, pad_first)
+
     def __repr__(self) -> str:
         fmt, res, fps = self.store_key
         return (f"VideoDataset({self.name!r}, split={self.split!r}, subset={self.subset!r}, store={fmt}/{res}/{fps or 'native'}fps, "
                 f"clips={len(self):,}, rate_hz={self.rate_hz})")
+
+
+@dataclass
+class EgoMotionTransform:
+    """After-batch transform: interpolated poses + frame-to-frame ego-motion as torch tensors in the batch dict.
+
+        loader = SlipstreamLoader(ds, ..., pipelines={"video": [DecodeVideoWindow(...)]},
+                                  after_batch_transforms=[ds.ego_motion_transform()])
+        batch["poses"]  # [B, T, 7] float32 world->camera at the decoded frame times
+        batch["ego"]    # [B, T-1, 6] float32 [dx dy dz rx ry rz] in the previous frame's axes (delta t-1 -> frame t)
+    """
+    ds: VideoDataset
+    field: str = "video"
+    poses_key: str = "poses"
+    ego_key: str = "ego"
+    pad_first: bool = False          # True: ego is [B, T, 6] with a zero row for frame 0 (aligns with frames)
+
+    def __call__(self, batch: dict) -> dict:
+        import torch
+        poses, ego = self.ds.ego_motion_at(batch[f"{self.field}_rec"], batch[f"{self.field}_t_sec"])
+        if self.pad_first:
+            ego = np.concatenate([np.zeros((ego.shape[0], 1, 6), dtype=ego.dtype), ego], axis=1)
+        batch[self.poses_key] = torch.from_numpy(poses)
+        batch[self.ego_key] = torch.from_numpy(ego)
+        return batch
 
 
 # ----------------------------------------------------------------------------- selection
