@@ -8,7 +8,7 @@
 `subset` defaults to the config's `default_subset` (spatialvid-hq: person_carried_v0, the training population); the
 split table itself labels *every* store clip, so `subset="all"` gives the whole store's split members (e.g. all 16,932
 v3 val clips rather than the population's 15,029).
-    recs, t0 = ds.window_sampler(window_s=8.0, seed=0).sample(epoch=0)
+    loader = SlipstreamLoader(ds, indices=ds.window_sampler(8.0).recs, pipelines={"video": [DecodeVideoWindow(...)]}, ...)
     poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])      # [B, T, 7] world->camera at the true frame times
 
 Store choice: `fps=` picks a store exactly (`fps="native"` = the un-decimated store); otherwise `rate_hz` (default
@@ -174,6 +174,11 @@ class VideoDataset:
     @property
     def fps(self) -> int | None:
         return self.store_key[2]
+
+    @property
+    def cache_path(self) -> Path:
+        """Store directory, so `SlipstreamLoader(ds, ...)` accepts the dataset directly (the loader duck-types on it)."""
+        return self.store_dir
 
     def video_store(self, device: str = "cpu"):
         from .video import VideoStore
