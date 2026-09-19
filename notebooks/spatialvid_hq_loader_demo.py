@@ -17,11 +17,11 @@
 # What this shows, end to end, on the h265 video store:
 #
 # 1. `load("spatialvid-hq", ...)` → a `VideoDataset` (store choice by `rate_hz`/`fps`, split, population subset).
-# 2. Seeded window anchors `(record, t0)` and a slipstream loader whose `DecodeVideoWindow` stage returns
-#    `[B, T, 3, H, W]` uint8 frames **and the true frame times**.
-# 3. `ds.poses_at(rec, t_sec)` → `[B, T, 7]` world→camera poses interpolated to those frame times (linear position,
-#    slerp rotation) from the ~5 Hz annotations.
-# 4. `ds.ego_motion_at(rec, t_sec)` → the same poses **plus** `[B, T-1, 6]` frame-to-frame deltas
+# 2. `SlipstreamLoader(ds, ...)` with a `DecodeVideoWindow` stage that returns `[B, T, 3, H, W]` uint8 frames **and the
+#    true frame times**, drawing a random window start per clip per epoch.
+# 3. `batch["poses"]` → `[B, T, 7]` world→camera poses interpolated to those frame times (linear position,
+#    slerp rotation) from the ~5 Hz annotations, added by the `ds.ego_motion_transform()` after-batch transform.
+# 4. `batch["ego"]` → `[B, T-1, 6]` frame-to-frame deltas
 #    `[dx dy dz rx ry rz]` in the previous frame's camera axes — the `ego_motion` input of a CNN+RNN
 #    (frame → CNN embedding; embedding + ego-motion → RNN → predicted next embedding).
 # 5. Seed reproducibility, cold vs warm epoch throughput.
@@ -62,32 +62,32 @@ print("val, walking only    :", len(load("spatialvid-hq", split="val", rate_hz=1
 print("val, native fps store:", load("spatialvid-hq", split="val", fps="native").store_dir.name)
 
 # %% [markdown]
-# ## 2. Windows: seeded anchors → slipstream loader with `DecodeVideoWindow`
+# ## 2. Windows: `SlipstreamLoader(ds, ...)` with `DecodeVideoWindow` + the ego-motion after-batch transform
 #
-# A window is `T` frames at `rate_hz` starting at `t0` seconds into a clip. `ds.window_sampler` drops clips shorter
-# than the window and draws one `t0` per clip per epoch, reproducibly from `(seed, epoch)`.
+# A window is `T` frames at `rate_hz` starting at `t0` seconds into a clip. `DecodeVideoWindow` draws `t0`
+# uniformly inside each clip (fresh draw every epoch, seeded); `ds.window_sampler(window_s).recs` just drops the
+# clips too short for the window. `ds.ego_motion_transform()` adds `poses` [B, T, 7] and `ego` [B, T-1, 6] to
+# every batch from the decoder's true frame times (vectorised over the batch, ~0.05 ms per window).
 
 # %%
-from slipstream.dataset import SlipstreamDataset
 from slipstream.decoders import DecodeVideoWindow
 from slipstream.loader import SlipstreamLoader
 
 T, RATE, B = 120, 15.0, 8                         # 8 s windows at 15 Hz
-sampler = ds.window_sampler(window_s=T / RATE, seed=0)
-recs, t0 = sampler.sample(epoch=0)
-print(f"{len(sampler):,} eligible clips; first anchors: rec={recs[:4]} t0={np.round(t0[:4], 2)}")
+clips = ds.window_sampler(window_s=T / RATE).recs
+print(f"{len(clips):,} clips long enough for an {T / RATE:g} s window")
 
-def make_loader(recs, t0, n=512, workers=None, seed=0):
-    """Loader over the first n anchors. The stage reads t0 from `sample_data` and returns the true frame times."""
-    stage = DecodeVideoWindow(T=T, rate_hz=RATE, seed=seed, t0_key="t0", device="cpu", num_workers=workers, resize=224)
-    return SlipstreamLoader(SlipstreamDataset(local_dir=str(ds.store_dir)), batch_size=B, shuffle=True, seed=seed,
-                            drop_last=True, indices=recs[:n], sample_data={"t0": t0[:n]}, batches_ahead=8,
-                            image_field="video", pipelines={"video": [stage]}, verbose=False)
+def make_loader(clips, workers=None, seed=0, n=None):
+    stage = DecodeVideoWindow(T=T, rate_hz=RATE, seed=seed, device="cpu", num_workers=workers, resize=224)
+    return SlipstreamLoader(ds, indices=clips if n is None else clips[:n], batch_size=B, shuffle=True, seed=seed, drop_last=True,
+                            batches_ahead=8, image_field="video", pipelines={"video": [stage]},
+                            after_batch_transforms=[ds.ego_motion_transform()], verbose=False)
 
-loader = make_loader(recs, t0, n=64, workers=16)
+loader = make_loader(clips, workers=16, n=64)
 batch = next(iter(loader))
 frames, t_sec, rec = batch["video"], batch["video_t_sec"], batch["video_rec"]
-print("frames", tuple(frames.shape), frames.dtype, "| t_sec", tuple(t_sec.shape), "| rec", tuple(rec.shape))
+poses, deltas = batch["poses"].numpy(), batch["ego"].numpy()
+print("frames", tuple(frames.shape), frames.dtype, "| t_sec", tuple(t_sec.shape), "| poses", poses.shape, "| ego", deltas.shape)
 print("frame times of sample 0 (s):", np.round(t_sec[0, :6].numpy(), 3), "...", np.round(t_sec[0, -2:].numpy(), 3))
 
 # %%
@@ -99,12 +99,12 @@ plt.suptitle(f"record {int(rec[0])}: 6 of the {T} frames of one 8 s window"); pl
 # %% [markdown]
 # ## 3. Interpolated camera poses at the frame times
 #
-# Poses are world→camera `[tx ty tz qx qy qz qw]` (OpenCV axes, non-metric scale, ~5 Hz annotations). `poses_at`
-# interpolates them to the **true** frame times the decoder returned, so pose and pixel agree even for VFR sources.
+# Poses are world→camera `[tx ty tz qx qy qz qw]` (OpenCV axes, non-metric scale, ~5 Hz annotations), interpolated
+# (linear position, slerp rotation) to the **true** frame times the decoder returned, so pose and pixel agree even
+# for VFR sources. `batch["poses"]` is exactly `ds.poses_at(rec, t_sec)`:
 
 # %%
-poses = ds.poses_at(rec, t_sec)                    # [B, T, 7]
-print("poses", poses.shape, poses.dtype)
+print("matches ds.poses_at:", np.allclose(poses, ds.poses_at(rec, t_sec)))
 print("sample 0, first 3 frames:\n", np.round(poses[0, :3], 4))
 
 centers = camera_centers(poses)                    # [B, T, 3] camera positions in world axes
@@ -117,20 +117,18 @@ plt.tight_layout(); plt.show()
 # %% [markdown]
 # ## 4. Ego-motion deltas: change in pose since the last frame
 #
-# `ds.ego_motion_at` returns the poses and, per consecutive frame pair, the relative motion **expressed in the
-# previous frame's camera axes**: `[dx dy dz rx ry rz]` — translation (x right, y down, z forward; pose units) and
-# rotation as a rotation vector (radians). Delta `t` describes the move from frame `t` to frame `t+1`, so for a
-# CNN+RNN it pairs with frame `t+1` (the RNN sees "where the camera went since the last embedding"). Walking forward
-# is a steady positive `dz`; a turn shows in `ry`.
+# `batch["ego"]` holds, per consecutive frame pair, the relative motion **expressed in the previous frame's camera
+# axes**: `[dx dy dz rx ry rz]` — translation (x right, y down, z forward; pose units) and rotation as a rotation
+# vector (radians). Delta `t` describes the move from frame `t` to frame `t+1`, so for a CNN+RNN it pairs with
+# frame `t+1` (the RNN sees "where the camera went since the last embedding"). Walking forward is a steady
+# positive `dz`; a turn shows in `ry`. `ds.ego_motion_transform(pad_first=True)` returns `[B, T, 6]` with a zero
+# row for frame 0 instead.
 
 # %%
-poses, deltas = ds.ego_motion_at(rec, t_sec)       # [B, T, 7], [B, T-1, 6]
-print("poses", poses.shape, "deltas", deltas.shape)
-print("sample 0, first 3 deltas [dx dy dz rx ry rz]:\n", np.round(deltas[0, :3], 4))
-
 # identical to the pairwise reference implementation used by the authors' get_instructions.py
 ref = np.stack([relative_motion(poses[0, i], poses[0, i + 1]) for i in range(T - 1)])
 print("matches relative_motion pairwise:", np.allclose(deltas[0], ref, atol=1e-5))
+print("sample 0, first 3 deltas [dx dy dz rx ry rz]:\n", np.round(deltas[0, :3], 4))
 
 # %%
 fig, axes = plt.subplots(2, 1, figsize=(12, 5), sharex=True)
@@ -149,8 +147,7 @@ plt.suptitle(f"ego-motion of record {int(rec[0])} at {RATE:g} Hz"); plt.show()
 # (or drop frame 0).
 
 # %%
-ego = torch.from_numpy(deltas)                                    # [B, T-1, 6]
-ego = torch.cat([torch.zeros(B, 1, 6), ego], dim=1)               # [B, T, 6]: delta into frame t (0 for frame 0)
+ego = torch.cat([torch.zeros(B, 1, 6), batch["ego"]], dim=1)      # [B, T, 6]: delta into frame t (0 for frame 0)
 x_frames = frames.float().div_(255)                               # [B, T, 3, H, W] → CNN, e.g. x_frames.flatten(0, 1)
 print("cnn input", tuple(x_frames.shape), "| rnn side input", tuple(ego.shape), "| target = embeddings shifted by one frame")
 print("per-batch ego-motion scale (std):", np.round(ego.std(dim=(0, 1)).numpy(), 4), " ← normalise per dataset before the RNN")
@@ -163,9 +160,9 @@ print("per-batch ego-motion scale (std):", np.round(ego.std(dim=(0, 1)).numpy(),
 
 # %%
 def first_batch_signature(seed):
-    l = make_loader(recs, t0, n=64, workers=16, seed=seed)
+    l = make_loader(clips, workers=16, seed=seed, n=64)
     b = next(iter(l)); l.shutdown()
-    return b["video_rec"].numpy().copy(), b["video_t_sec"][:, 0].numpy().copy(), b["video"][:, 0].float().mean().item()
+    return b["video_rec"].numpy().copy(), b["video_t0"].numpy().copy(), b["video"][:, 0].float().mean().item()
 
 a1, a2, a3 = first_batch_signature(0), first_batch_signature(0), first_batch_signature(1)
 print("same seed → same records, t0, pixels:", np.array_equal(a1[0], a2[0]), np.allclose(a1[1], a2[1]), a1[2] == a2[2])
@@ -173,11 +170,11 @@ print("other seed → different batch     :", not np.array_equal(a1[0], a3[0]))
 
 # %%
 N = 1024
-loader = make_loader(recs, t0, n=N, workers=os.cpu_count())
+loader = make_loader(clips, workers=os.cpu_count(), n=N)
 print(f"page-cache residency before: {loader.page_cache_residency():.2f}")
 for ep in range(2):
     t = time.perf_counter(); n = 0
-    for b in loader:
+    for b in loader:                                   # each pass = a new epoch: new order, new t0 draws
         n += b["video"].shape[0]
     dt = time.perf_counter() - t
     print(f"epoch {ep + 1}: {n / dt:,.1f} windows/s  ({n * T / dt:,.0f} frames/s, {n} windows, residency now {loader.page_cache_residency():.2f})")
