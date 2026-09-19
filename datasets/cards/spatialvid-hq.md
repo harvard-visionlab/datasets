@@ -1,162 +1,296 @@
-# SpatialVID-HQ (lab build) — dataset card
+# SpatialVID-HQ (lab build)
 
-Registry name `spatialvid-hq` · `load("spatialvid-hq", split=, subset=, rate_hz=|fps=, res=, where=, channel_cap=)` → `VideoDataset`
-· lab tree `DataSets/VideoDatasets/SpatialVID-HQ-slipstream/` (QNAP exactitude Flash) · S3 `s3://visionlab-datasets/slipstream-cache/spatialvid-hq/`
-· card written 2026-09-18 from `index/summary.json`, `stores/*/store_manifest.json`, `subsets/person_carried_v0.report.md`, `splits/v3.report.md`.
+SpatialVID-HQ is a collection of ~365k short video clips (up to 15 s each, most 8–15 s; 1,100 hours total) cut
+from ~22k YouTube videos. Most of the footage is a moving camera in the real world: someone walking through a city or
+a forest, a dashcam, a bike, a boat, a drone. What makes it useful is that every clip comes with an **estimated camera
+trajectory**: where the camera was and which way it pointed, about five times per second. Our lab copy adds a
+train/val/test split, a curated "person walking" subset, a fast loader, and camera poses interpolated to every frame.
 
-## 1. Source, license, citation
+Videos are 360p or lower (this is a _quality-filtered_ subset of the larger SpatialVID, not a high-resolution one).
 
-- **Upstream**: SpatialVID-HQ, the curated high-quality subset of SpatialVID (Nanjing University, 2025): YouTube clips with
-  per-frame camera poses, depth-derived annotations, captions and motion/scene tags. HF: `SpatialVID/SpatialVID-HQ`.
-- **License**: the upstream dataset card lists CC BY-NC-SA 4.0 for the annotations; the videos remain the YouTube uploaders'
-  (research use only, no redistribution of frames). Verify against the HF card before any external release.
-- **Cite**: Wang et al., *SpatialVID: A Large-Scale Video Dataset with Spatial Annotations*, 2025 (arXiv:2509.09676).
-- **Lab build**: `visionlab-datasets` (`datasets/prep/spatialvid_hq/`), slipstream ≥ 0.7.0. Store build dates: native stores
-  2026-09-13, fps stores 2026-09-17/18. Split v3 2026-09-17.
+## Source dataset
 
-## 2. What a record is
+[SpatialVID-HQ](https://huggingface.co/datasets/SpatialVID/SpatialVID-HQ) is "a large corpus of in-the-wild videos
+with diverse scenes, camera movements and dense 3D annotations such as per-frame camera poses, depth, and motion
+instructions" (Wang et al., 2026; [project page](https://huggingface.co/SpatialVID)). HQ is the authors' curated
+high-quality tier of the 7,000-hour SpatialVID corpus.
 
-One upstream clip (a shot of a YouTube video, 2–~30 s), stored as an h265 MP4 byte string plus its annotations:
+|                       |                                      |
+| --------------------- | -----------------------------------: |
+| clips                 |                              365,362 |
+| source YouTube videos |                               22,543 |
+| hours                 |                                1,112 |
+| frames                |                              184.5 M |
+| source frame rates    | mostly 60 and 30 fps (also 24/25/50) |
 
-| field | meaning |
-| --- | --- |
-| `video` | h265 MP4 (libx265, crf 29, preset medium, 1 s GOP), one of the resolutions below |
-| `clip_id`, `source_id`, `group_id` | upstream ids: clip, YouTube video (source), HQ shard |
-| `fps`, `num_frames`, `duration_s`, `width`, `height` | of the stored stream (fps stores: decimated); `src_fps`, `src_num_frames` = source stream |
-| `poses` | (n, 7) world→camera `[tx ty tz qx qy qz qw]`, OpenCV axes (x right, y down, z forward), **non-metric scale**, ≈ 5 Hz |
-| `annot_frame_idx` | (n,) *source* frame index of each pose row (time = idx / `src_fps`) |
-| `intrinsics` | (n, 4) normalised `[fx fy cx cy]` per annotated frame |
-| `caption`, `scene_type`, `time_of_day`, `weather`, `crowd_density`, `motion_tags`, `instructions`, scores | upstream text / tags / quality scores (captions are noisy) |
+Per clip, the authors provide: camera position + rotation at keyframes (~5 Hz, estimated with MegaSaM, scale is
+_not_ metric), camera intrinsics, a text caption, scene tags (scene type, time of day, weather, crowd density),
+motion tags, and quality scores. Depth maps and dynamic masks exist upstream but are not in our build (ask George
+if you need these for your research).
 
-Poses are interpolated to arbitrary frame times by `VideoDataset.poses_at` (linear position, slerp rotation); frame-to-frame
-ego-motion `[dx dy dz rx ry rz]` in the previous frame's camera axes by `VideoDataset.ego_motion_at` / `video.ego_motion`.
+License: annotations CC BY-NC-SA 4.0; the videos belong to their YouTube uploaders (research use only, no
+redistribution of frames). Our copy is therefore not public.
 
-## 3. Counts
+```bibtex
+@inproceedings{wang2026spatialvid,
+  title={SpatialVID: A large-scale video dataset with spatial annotations},
+  author={Wang, Jiahao and Yuan, Yufeng and Zheng, Rujie and Lin, Youtian and Gao, Jian and Chen, Lin-Zhuo and Bao, Yajie and Zeng, Chang and Zhou, Yanxi and Long, Xiao-Xiao and others},
+  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  pages={42592--42603},
+  year={2026}
+}
+```
 
-| | clips | hours | frames | sources (videos) | channels |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| upstream HQ index (`index/clips.parquet`) | 365,362 | 1,112 | — | 22,543 | — |
-| **stores** (every clip with consistent annotations) | **365,296** | | | | |
-| population `person_carried_v0` | 213,103 (58.3 %) | 644 | 106.7 M | 13,222 | 82 |
+## What our build adds
 
-Source frame rates in the population: 60 fps 51 %, 30 fps 38 %, 24 fps 6 %, 50 fps 3 %, 25 fps 2 %. Duration: 68 % of the
-population clips (87 % of frames) are ≥ 8 s; 88 % ≥ 4 s.
+Our copy is stored in [slipstream](https://github.com/harvard-visionlab/slipstream) format (one compact h265 MP4 per
+clip, decoded on the fly), so a window of frames plus its camera poses can be pulled at thousands of frames per second.
 
-### Counts per subset × split (split version v3; hours/frames from `index/clips.parquet`)
+**Train / val / test split.** The source dataset has no split, so we made one (version `v3`). All clips from one
+YouTube video always land in the same split, and clips were balanced across scene type, time of day, weather, crowd
+density, motion tags and carrier. Val holds out _whole videos_ from channels that also appear in train (same
+distribution as train). Test holds out _seven whole channels_ never seen in train, so it measures transfer to new
+creators. 66 clips (0.02 %) have corrupt pose files upstream and are excluded from everything.
 
-`load(split=...)` returns the **population** rows by default; `subset="all"` the whole-store rows.
+| split (whole dataset) |   clips | videos | channels | hours |
+| --------------------- | ------: | -----: | -------: | ----: |
+| train                 | 334,494 | 20,939 |      129 | 1,020 |
+| val                   |  16,932 |    729 |       63 |    50 |
+| test                  |  13,870 |    872 |        7 |    42 |
 
-**Population `person_carried_v0`** (`load(..., split=)`)
+**Person-walking subset.** The camera in the full set is carried by many things: a walking person, a car, a bike, a
+train, a boat, a drone. For work on first-person locomotion we labelled each YouTube channel by _carrier_ and built a
+subset of clips from a person-borne camera (hand-held, head-mounted, or on a stabiliser/chest rig), excluding clips
+tagged stationary or moving implausibly fast. This subset is called `person_carried_v0` and it is what `load()`
+returns by default. It is 58 % of the whole dataset.
 
-| split | clips | videos | channels | hours | frames (M) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| train | 186,710 | 11,745 | 75 | 563 | 93.0 |
-| val | 15,029 | 729 | 63 | 46 | 7.5 |
-| test | 11,364 | 748 | 7 | 35 | 6.2 |
-| all | 213,103 | 13,222 | 82 | 644 | 106.7 |
+| split (`person_carried_v0`) |   clips | videos | channels | hours |
+| --------------------------- | ------: | -----: | -------: | ----: |
+| train                       | 186,710 | 11,745 |       75 |   563 |
+| val                         |  15,029 |    729 |       63 |    46 |
+| test                        |  11,364 |    748 |        7 |    35 |
+| total                       | 213,103 | 13,222 |       82 |   644 |
 
-| carrier | train | val | test | total |
-| --- | ---: | ---: | ---: | ---: |
-| walk | 163,164 | 13,185 | 11,364 | 187,713 |
-| rig | 23,546 | 1,844 | 0 | 25,390 |
+**Resolutions and frame rates.** Each clip is stored six ways: 640×360 or 456×256, at the source frame rate, 30 fps,
+or 15 fps. The lower frame rates drop frames exactly (every 2nd or 4th), so frame times stay exact. See Usage for
+which to pick.
 
-**Whole store** (`load(..., split=, subset="all")`)
+**Per-frame camera poses.** The source poses are at ~5 Hz keyframes. We interpolate them (linear for position,
+spherical-linear for rotation) to the exact time of every decoded frame, and convert them to frame-to-frame
+**ego-motion**: how far the camera moved and turned since the previous frame, in the previous frame's own axes.
 
-| split | clips | videos | channels | hours | frames (M) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| train | 334,494 | 20,939 | 129 | 1,020 | 169.1 |
-| val | 16,932 | 729 | 63 | 50 | 8.2 |
-| test | 13,870 | 872 | 7 | 42 | 7.2 |
-| excluded (not in any store) | 66 | 48 | 35 | 0 | 0.0 |
-| all | 365,362 | 22,543 | 136 | 1,112 | 184.5 |
+### What a sample looks like
 
-Clips outside the population, by carrier (what `subset="all"` adds; `walk`/`rig` rows here failed the speed or
-stationary-tag criteria):
+```python
+from visionlab.datasets import load
 
-| carrier | train | val | test | excluded | total |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| drive | 50,734 | 0 | 489 | 2 | 51,225 |
-| mixed | 22,539 | 0 | 242 | 8 | 22,789 |
-| walk | 18,840 | 1,507 | 1,499 | 41 | 21,887 |
-| no_channel | 11,025 | 0 | 0 | 1 | 11,026 |
-| bike | 9,939 | 0 | 46 | 1 | 9,986 |
-| drone | 7,983 | 0 | 0 | 4 | 7,987 |
-| rig | 7,290 | 396 | 0 | 7 | 7,693 |
-| train | 7,457 | 0 | 44 | 0 | 7,501 |
-| unlabelled | 5,686 | 0 | 0 | 1 | 5,687 |
-| other | 5,519 | 0 | 0 | 1 | 5,520 |
-| boat | 772 | 0 | 186 | 0 | 958 |
+ds = load("spatialvid-hq", split="val")          # defaults: person_carried_v0, 456x256, 15 fps store
+print(ds)     # VideoDataset('spatialvid-hq', split='val', subset='person_carried_v0', store=h265/456x256/15fps, clips=15,029, rate_hz=15)
 
-Val videos are chosen from channels that are in train and stratified to the population, so non-population val rows are
-only the walk/rig clips of those videos that failed the speed/stationary criteria. The 7 test channels are walking
-channels, so their non-population rows are mostly the same plus a few drive/boat/bike clips those creators uploaded.
-Regenerate these tables with `python -m datasets.prep.spatialvid_hq.card_counts --tree <tree>`.
+rec = ds.record(ds.indices[0])                    # one clip's metadata + annotations (no pixels)
+```
 
-## 4. Stores (fmt × resolution × fps)
+The record is a plain dict. The fields you will actually use:
 
-| store | frames | bytes | notes |
-| --- | --- | ---: | --- |
-| `spatialvid-hq-h265-640x360` | source rate | 296 GB | native |
-| `spatialvid-hq-h265-456x256` | source rate | 169 GB (178,454,929,460 B video) | native, **default resolution** |
-| `…-640x360-30fps`, `…-456x256-30fps` | 30 fps | 311 / 176 GB | integer decimation of 60 fps sources, 30/24/25 fps kept as is |
-| `…-640x360-15fps`, `…-456x256-15fps` | 15 fps | 295 / 167 GB | 60 → 15, 30 → 15, 50 → 16.7, 24/25 kept |
+| field                                                                  | type / shape     | meaning                                                                                                                                 |
+| ---------------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `video`                                                                | bytes            | the clip as an h265 MP4 (only when `with_video=True`; the loader decodes it for you)                                                    |
+| `clip_id`, `source_id`                                                 | str              | SpatialVID clip id; YouTube id of the source video                                                                                      |
+| `width`, `height`, `fps`, `num_frames`, `duration_s`                   | int / float      | of the stored video                                                                                                                     |
+| `poses`                                                                | float32 `(n, 7)` | camera pose at each annotated frame: `[tx ty tz qx qy qz qw]`, world→camera, OpenCV axes (x right, y down, z forward), non-metric scale |
+| `annot_frame_idx`                                                      | int32 `(n,)`     | which _source_ frame each pose row belongs to (time = idx / `src_fps`)                                                                  |
+| `intrinsics`                                                           | float32 `(n, 4)` | normalised `[fx fy cx cy]` (multiply by width/height for pixels)                                                                        |
+| `caption`                                                              | dict             | authors' generated description of the scene and camera motion                                                                           |
+| `scene_type`, `time_of_day`, `weather`, `crowd_density`, `motion_tags` | str              | authors' tags, e.g. `"Urban;Street Scene"`, `"Daytime"`, `"Rainy"`, `"Sparse"`, `"right,forward"`                                      |
 
-fps stores: decimation `select=not(mod(n,k))` with exact timestamps (`setpts=N*k/FRAME_RATE/TB`), so frame times are exact
-and `annot_frame_idx` still indexes *source* frames; ~0.03 % VFR sources use a select-only fallback. `rate_hz` in `load()` picks
-the sparsest store whose fps is an integer multiple of the rate (15 Hz → 15 fps, 10/30 Hz → 30 fps); `fps=` picks exactly;
-`fps="native"` the un-decimated store. Default rate 15 Hz. All six stores contain the full 365,296-clip set (a patch pass re-encodes any failed clip).
+Also present: `src_fps`, `src_num_frames`, `group_id`, `instructions` (the authors' motion-instruction spans, e.g.
+`{"0->3": ["Stay"], "3->62": ["Dolly In"]}`), `brightness`, and quality scores (`aesthetic_score`, `motion_score`, ...).
+The caption is a dict with `SceneSummary`, `SceneDescription`, `CameraMotion`, `ShotImmersion`, `CategoryTags`,
+`MotionTrends`; the summary of the record above reads *"A rainy Korean city street features a sidewalk, vehicles,
+and apartment buildings, all bathed in a muted light under an overcast sky."*
 
-## 5. Exclusions
+`ds.clips` is a table with one row per selected clip (no pixels, no poses). It has the store columns above plus our
+labels: `split`, `channel_id`, `channel_title`, `carrier` (`walk`, `rig`, `drive`, `bike`, `drone`, `boat`, `train`,
+...), `in_subset`, and the coarse categories the split was balanced on: `scene_l1` (Urban / Interior / Natural
+Landscape / Rural / Waterfront), `tod` (day / night / dawn_dusk / unknown), `weather_c` (Sunny / Cloudy / Rainy /
+Snowy / other), `crowd` (Deserted / Sparse / Moderate / Crowded), `motion` (forward_only / turning / other),
+`dur_bucket` (short / mid / long).
 
-66 upstream clips (`index/excluded_clips.csv`) are in no store: their annotation files are internally inconsistent (pose /
-intrinsics row count ≠ frame-index row count), so no frame can be assigned a pose. They carry `split = excluded` in the split table.
+Training samples are not whole clips but **windows**: `T` frames at some rate starting at a random time in a clip,
+returned as a `[B, T, 3, H, W]` uint8 tensor plus the true frame times, from which `ds.poses_at` gives `[B, T, 7]`
+poses and `ds.ego_motion_at` gives `[B, T-1, 6]` deltas `[dx dy dz rx ry rz]` (translation in pose units, rotation as
+a rotation vector in radians). See Usage.
 
-## 6. Population (subset) `person_carried_v0`
+## Quality and diversity (honest assessment)
 
-Definition (`subsets/person_carried_v0.report.md`): carrier ∈ {walk, rig} — a **person-borne camera** (walking / hand-held /
-head-mounted; `rig` = stabiliser or chest rig) — no `stationary` motion tag, speed = `move_dist / duration_s` ≤ 0.5 (pose units/s),
-clip present in the stores. Carrier comes from a channel-level review of the 82 channels plus per-keyword video groups
-(`index/carrier_v1.parquet`; 86 % of clips inherit the channel label). Excluded carriers: drone, drive, bike, boat, train, tripod/interior tours.
-walk 187,713 · rig 25,390.
+- **Content diversity: moderate.** Scenes span cities, nature, indoor spaces, day and night, many countries. But the
+  footage is YouTube "walking tour"/"drive" genres: long steady shots, little camera-to-object interaction, few faces
+  up close. Channels are heavy-tailed: in the person-walking subset the top channel is 15 % of clips and the top
+  ten are about half. Use `channel_cap=` (below) if that matters for you, and always report test (unseen channels).
+- **Pose accuracy: good but unverified per clip.** Poses come from a structure-from-motion pipeline (MegaSaM) run by
+  the authors. They are smooth and consistent within a clip in every clip we inspected, but scale is arbitrary per
+  clip and there is no ground truth. Compare motion _within_ a clip, or normalise. The demo notebook
+  (`notebooks/spatialvid_hq_loader_demo.ipynb`) plots frames next to the recovered camera path so you can judge for
+  yourself.
 
-**Channel concentration** (a known bias): top channel 14.8 % of clips (Rain Everyday), top 5 = 36.7 %, top 10 ≈ 54 %. Use
-`channel_cap=` in `load()` to thin dominant channels, and never evaluate on train channels (see the split).
+  The figure below is one such window, chosen for a clear turn. The buildings sweep from right to left across the
+  frames while the recovered path bends right and the yaw trace goes negative over the same seconds; that kind of
+  agreement between pixels and poses is what to look for. Note the steps in the per-frame traces: the source poses
+  are ~5 Hz and interpolated linearly, so frame-to-frame deltas are piecewise constant over ~3 frames at 15 Hz.
 
-## 7. Splits (version v3, `splits/v3.parquet` + `v3.report.md`)
+  ![one 8 s window: frames, top-down camera path, ego-motion traces](figures/spatialvid-hq-window.png)
 
-The split table labels **every** index clip (365,362 rows; columns `split`, `val_kind`, `channel_id`, `carrier`, `in_subset`,
-strata) so any subset can reuse it; the numbers below are the population (`in_subset`), which `load()` applies by default
-(`subset="all"` for the whole store).
+  Regenerate with `python -m datasets.prep.spatialvid_hq.card_figure --out datasets/cards/figures/spatialvid-hq-window.png`.
 
-| split | unit | clips | sources | purpose |
-| --- | --- | ---: | ---: | --- |
-| train | — | 186,710 | 11,745 | |
-| val | whole YouTube **videos** of channels that are in train, stratified to train (≤ 1.2 pp off per stratum) | 15,029 | 729 | in-distribution model selection |
-| test | 7 whole **channels** never seen in train, typical strata mix, walk only | 11,364 | 748 | transfer to unseen creators |
+- **Text labels are machine-generated.** Captions and scene/weather/crowd tags were produced by vision-language
+  models upstream and are noisy. Our `carrier` labels were reviewed by hand, but at the channel level, so a walking
+  channel's occasional drone shot is labelled `walk`.
 
-Test channels: 4K Nature and City Walks, The Flying Dutchman, Justwalk, TokyoNinjaWalk, Drifted Films, Hui Chen, Trillionex Travel.
-Whole-store counts of the same labels: train 334,494 · val 16,932 · test 13,870 · excluded 66. Built with
-`make_splits --val-unit three --test-clips 11000 --val-clips 15000 --max-source-clips 200 --max-unit-frac 0.015`. v1 (source-level, no
-channel holdout) is kept for comparison only.
+## Usage
 
-## 8. Conventions and caveats
+```python
+from visionlab.datasets import load
+ds = load("spatialvid-hq", split="train")
+```
 
-- Poses: world→camera, OpenCV axes, scale is per-clip and non-metric (SfM); compare motion *within* a clip only, or normalise.
-- Pose times are `annot_frame_idx / src_fps`; `poses_at` clamps outside the annotated range (first/last ~0.1 s of a clip).
-- `DecodeVideoWindow` never requests the last two frames of a clip (NVDEC last-frame bug); `end_margin_frames` in the sampler.
-- torchcodec `get_frames_played_at(t)` returns the frame *playing at* t (floor); the loader returns the true pts, use those.
-- Decode is CPU-bound: 64 decoders on machina give ~163 windows/s (T = 120, 15 Hz, resize 224) from the 15 fps store, 139 from
-  30 fps, 121 from native; off a CIFS mount the first epoch is disk-bound (84) and later epochs match (page cache). Stage the store
-  in `$SLIPSTREAM_CACHE_DIR`, set `OMP_NUM_THREADS=1` in every process hosting the stage.
-- Normalisation stats: `metadata["stats"][<store>]` in `_configs/spatialvid_hq.py` (RGB, frame-level, computed by `prep/spatialvid_hq/stats.py`).
-- Captions and scene/weather tags are model-generated upstream and noisy; the carrier labels are lab-reviewed at channel level, not per clip.
+Everything below is a keyword argument to `load`. Defaults are in bold.
 
-## 9. Versions
+**`split`** = **`"train"`** | `"val"` | `"test"` | `"all"`. Train on train, pick hyperparameters on val, report on
+test. Test channels never appear in train, so test is the number that says whether you learned walking or learned
+those creators.
 
-| item | value |
-| --- | --- |
-| index build | 2026-09-12 (`index/summary.json`) |
-| stores | native 2026-09-13; 30/15 fps 2026-09-17/18 (`store_manifest.json`, `errors` = clips that needed the patch pass) |
-| subset | `person_carried_v0` (2026-09-16 definition) |
-| split | v3 (2026-09-17) |
-| software | visionlab-datasets 0.9.0, slipstream 0.7.0, ffmpeg 4.4.2 (machina) / 6.1.1 (fleet), libx265 |
+**`subset`** = **`"person_carried_v0"`** | `"all"`. Default is the person-walking subset. Use `"all"` if you want
+every carrier (driving, drones, boats...). The split labels are the same either way, so a model trained on the subset
+can be evaluated on the whole-store test split.
+
+**`where`** = a pandas query over the `ds.clips` columns listed above, for finer selection:
+`where="carrier == 'walk'"`, `where="scene_l1 == 'Urban' and tod == 'night'"`, `where="dur_bucket == 'long'"`.
+(The raw per-clip tags such as `time_of_day` live in the record, not in this table; use the coarse columns.)
+
+**`channel_cap`** = fraction of clips any single channel may contribute (e.g. `0.02`). Randomly thins the dominant
+channels. Use it if you suspect a model is memorising the two or three biggest creators.
+
+**`rate_hz`** = the frame rate you will sample at (**15**). This picks the sparsest store that can serve that rate
+exactly (15 Hz → 15 fps store; 10 or 30 Hz → 30 fps store; anything else → source rate). Alternatively **`fps`** =
+`15` | `30` | `"native"` picks a store directly.
+
+_Which frame rate?_ Decoding is the bottleneck and its cost scales with the _stored_ frame rate, not with how many
+frames you keep: the 15 fps store trains about 35 % faster than the source-rate store for the same 15 Hz windows.
+Use 15 Hz unless you need finer temporal resolution. At 15 Hz walking motion is smooth and poses are still
+interpolated from the same 5 Hz keyframes, so nothing about pose accuracy changes with frame rate. Use 30 Hz for
+fast motion or optical-flow-like targets. Use `fps="native"` only if you need every source frame.
+
+**`res`** = **`"456x256"`** | `"640x360"`. Both are 16:9. 456×256 is 40 % fewer bytes and enough for 224-pixel
+inputs; use 640×360 if you crop or need more detail.
+
+### Windows, frames, poses
+
+A **window** is the training sample: `T` consecutive frames at `RATE` Hz, starting at some time `t0` inside a clip.
+Two things have to happen: choose `(clip, t0)` for each sample, and decode those frames. Decoding is done by a
+slipstream pipeline stage, `DecodeVideoWindow`; choosing `t0` can be left to that stage or done by you.
+
+**Simplest: let the stage pick a random start each epoch** (training).
+
+```python
+from slipstream.decoders import DecodeVideoWindow
+from slipstream.loader import SlipstreamLoader
+
+T, RATE, B = 120, 15.0, 8                                   # 8 s windows at 15 Hz, batch of 8
+clips = ds.window_sampler(window_s=T / RATE).recs           # record indices of clips long enough for an 8 s window
+
+stage = DecodeVideoWindow(T=T, rate_hz=RATE, seed=0, resize=224, device="cpu", num_workers=16)
+loader = SlipstreamLoader(ds, indices=clips, batch_size=B, shuffle=True, seed=0, drop_last=True,
+                          image_field="video", pipelines={"video": [stage]},
+                          after_batch_transforms=[ds.ego_motion_transform()])
+
+for epoch in range(n_epochs):
+    for batch in loader:                                    # new clip order and new t0 draws every epoch
+        frames = batch["video"]                             # [8, 120, 3, 224, 398] uint8
+        poses = batch["poses"]                              # [8, 120, 7]  camera pose at each frame
+        ego = batch["ego"]                                  # [8, 119, 6]  motion between consecutive frames
+```
+
+`indices` is the list of clips the loader iterates over: one window per clip per epoch, drawn uniformly from the
+times where an 8 s window fits. The decode stage returns frames plus their true timestamps; the after-batch
+transform looks up each clip's ~5 Hz poses, interpolates them to those timestamps and adds `poses` and `ego` to the
+batch (`ds.ego_motion_transform(pad_first=True)` gives `ego` as `[B, T, 6]` with a zero row for frame 0, so it lines
+up with `frames`). The `window_sampler` call is only there to drop clips shorter than the window
+(the stage would otherwise clamp the window against the end of a short clip and repeat frames). Reproducibility
+comes from the two seeds; the loader reseeds itself every pass, and `loader.set_epoch(e)` restores any epoch
+exactly (checkpoint resume, DDP).
+
+**Fixed starts** (evaluation, or several windows per clip). Draw `(clip, t0)` pairs yourself and hand them to the
+loader as per-sample data; the stage then uses them instead of drawing its own:
+
+```python
+sampler = ds.window_sampler(window_s=T / RATE, anchors_per_clip=2, seed=0)
+recs, t0 = sampler.sample(epoch=0)                          # two (clip, t0) pairs per clip; same seed → same pairs
+stage = DecodeVideoWindow(T=T, rate_hz=RATE, t0_key="t0", resize=224, device="cpu", num_workers=16)
+loader = SlipstreamLoader(ds, indices=recs, sample_data={"t0": t0}, batch_size=B, shuffle=False,
+                          image_field="video", pipelines={"video": [stage]},
+                          after_batch_transforms=[ds.ego_motion_transform()])
+```
+
+Here `indices` may repeat a clip and `t0` is aligned with it element for element. If you want fresh starts each
+epoch in this mode you must call `sampler.sample(epoch)` again and build a new loader; for training the first form
+does that for you.
+
+**What is in a batch.** `batch["video"]` is `[B, T, 3, H, W]` uint8 on the stage's device. `resize=224` scales the
+*short side* to 224 and keeps the aspect ratio (456×256 → 398×224); `resize=(H, W)` forces an exact size;
+`resize=None` returns the stored size (456×256 or 640×360). `batch["video_t_sec"]` `[B, T]` is the true timestamp of
+every decoded frame and `batch["video_rec"]` `[B]` the record index. `batch["poses"]` `[B, T, 7]` is the camera pose
+at each frame (`[tx ty tz qx qy qz qw]`, world→camera) and `batch["ego"]` `[B, T-1, 6]` the motion between
+consecutive frames, `[dx dy dz rx ry rz]`, in the earlier frame's camera axes: `ego[:, t-1]` is the move *into* frame
+`t`. Walking forward is a steady positive `dz`; because poses are world→camera, a right turn is a *negative* `ry`. Without the transform, `ds.ego_motion_at(batch["video_rec"], batch["video_t_sec"])` computes the same two
+arrays by hand. Per-channel RGB mean/std for normalisation are in `ds.stats`.
+
+The full walk-through, with plots, is `notebooks/spatialvid_hq_loader_demo.ipynb`.
+
+### Where the data lives
+
+`load()` looks for the store in `$SLIPSTREAM_CACHE_DIR`, then the lab QNAP mount, then downloads the one store you
+asked for from S3 (~170–310 GB each). On the lab machines the 456×256 stores are already staged; set
+`OMP_NUM_THREADS=1` before importing torch in any process that decodes.
+
+## Methods (paste into your paper, then edit)
+
+Replace every `{a | b}` with the value you used and delete the rest. Numbers in brackets refer to the tables above.
+
+**Full dataset.**
+
+> We used SpatialVID-HQ (Wang et al., 2026), a corpus of 365,362 clips of up to 15 s (1,112 hours) cut from 22,543 YouTube videos
+> of a moving camera in real-world scenes, each annotated with camera poses estimated at ~5 Hz by structure-from-motion.
+> Because the released dataset has no canonical split, we used the visionlab-datasets split (version v3), which assigns
+> whole source videos to a single split and is stratified over scene type, time of day, weather, crowd density, motion
+> tags and camera carrier. The validation split (16,932 clips) holds out whole videos from channels present in
+> training; the test split (13,870 clips) holds out seven entire channels absent from training. 66 clips with
+> inconsistent pose annotations were excluded. Videos were re-encoded at {456×256 | 640×360} pixels and
+> {15 | 30 | native} fps. Training samples were windows of {T} frames sampled at {15 | 30} Hz from random offsets within
+> a clip; camera poses were interpolated to each frame time (linear translation, spherical-linear rotation) and
+> expressed as frame-to-frame ego-motion in the previous frame's camera coordinates. [If used:] Channels were capped
+> at {x}% of the training clips.
+
+**Person-walking subset.**
+
+> We used the `person_carried_v0` subset of SpatialVID-HQ (Wang et al., 2026), curated by visionlab-datasets:
+> 213,103 clips (644 hours) from 13,222 YouTube videos across 82 channels in which the camera is carried by a walking
+> person (hand-held, head-mounted, or on a stabiliser). Carrier was assigned by manual review of each channel and its
+> video metadata; clips tagged stationary or exceeding a speed threshold (pose displacement / duration > 0.5) were
+> removed. Camera poses are structure-from-motion estimates at ~5 Hz with per-clip (non-metric) scale. We used split
+> v3, which assigns whole source videos to a single split and is stratified over scene type, time of day, weather,
+> crowd density, motion tags and carrier: train 186,710 clips (75 channels), validation 15,029 clips (whole videos
+> held out from training channels), test 11,364 clips (seven whole channels never seen in training). Videos were
+> re-encoded at {456×256 | 640×360} pixels and {15 | 30 | native} fps. Training samples were windows of {T} frames
+> sampled at {15 | 30} Hz from random offsets within a clip; camera poses were interpolated to each frame time (linear
+> translation, spherical-linear rotation) and expressed as frame-to-frame ego-motion in the previous frame's camera
+> coordinates. [If used:] Channels were capped at {x}% of the training clips.
+
+Cite Wang et al. (2026) for the data, and this repository (`harvard-visionlab/datasets`, split v3 /
+`person_carried_v0`) for the split and subset.
+
+## Build details
+
+For the curious or the reproducer: encoding settings, the exclusion list, the carrier review, split parameters, store
+sizes and benchmarks are in [`spatialvid-hq.md`](spatialvid-hq.md) and `datasets/prep/spatialvid_hq/README.md`.
+Build dates: stores 2026-09-13 to 2026-09-18, split v3 2026-09-17, software visionlab-datasets 0.9.0 /
+slipstream 0.7.0.
