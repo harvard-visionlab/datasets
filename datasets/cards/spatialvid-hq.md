@@ -42,6 +42,56 @@ ego-motion `[dx dy dz rx ry rz]` in the previous frame's camera axes by `VideoDa
 Source frame rates in the population: 60 fps 51 %, 30 fps 38 %, 24 fps 6 %, 50 fps 3 %, 25 fps 2 %. Duration: 68 % of the
 population clips (87 % of frames) are ≥ 8 s; 88 % ≥ 4 s.
 
+### Counts per subset × split (split version v3; hours/frames from `index/clips.parquet`)
+
+`load(split=...)` returns the **population** rows by default; `subset="all"` the whole-store rows.
+
+**Population `person_carried_v0`** (`load(..., split=)`)
+
+| split | clips | videos | channels | hours | frames (M) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| train | 186,710 | 11,745 | 75 | 563 | 93.0 |
+| val | 15,029 | 729 | 63 | 46 | 7.5 |
+| test | 11,364 | 748 | 7 | 35 | 6.2 |
+| all | 213,103 | 13,222 | 82 | 644 | 106.7 |
+
+| carrier | train | val | test | total |
+| --- | ---: | ---: | ---: | ---: |
+| walk | 163,164 | 13,185 | 11,364 | 187,713 |
+| rig | 23,546 | 1,844 | 0 | 25,390 |
+
+**Whole store** (`load(..., split=, subset="all")`)
+
+| split | clips | videos | channels | hours | frames (M) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| train | 334,494 | 20,939 | 129 | 1,020 | 169.1 |
+| val | 16,932 | 729 | 63 | 50 | 8.2 |
+| test | 13,870 | 872 | 7 | 42 | 7.2 |
+| excluded (not in any store) | 66 | 48 | 35 | 0 | 0.0 |
+| all | 365,362 | 22,543 | 136 | 1,112 | 184.5 |
+
+Clips outside the population, by carrier (what `subset="all"` adds; `walk`/`rig` rows here failed the speed or
+stationary-tag criteria):
+
+| carrier | train | val | test | excluded | total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| drive | 50,734 | 0 | 489 | 2 | 51,225 |
+| mixed | 22,539 | 0 | 242 | 8 | 22,789 |
+| walk | 18,840 | 1,507 | 1,499 | 41 | 21,887 |
+| no_channel | 11,025 | 0 | 0 | 1 | 11,026 |
+| bike | 9,939 | 0 | 46 | 1 | 9,986 |
+| drone | 7,983 | 0 | 0 | 4 | 7,987 |
+| rig | 7,290 | 396 | 0 | 7 | 7,693 |
+| train | 7,457 | 0 | 44 | 0 | 7,501 |
+| unlabelled | 5,686 | 0 | 0 | 1 | 5,687 |
+| other | 5,519 | 0 | 0 | 1 | 5,520 |
+| boat | 772 | 0 | 186 | 0 | 958 |
+
+Val videos are chosen from channels that are in train and stratified to the population, so non-population val rows are
+only the walk/rig clips of those videos that failed the speed/stationary criteria. The 7 test channels are walking
+channels, so their non-population rows are mostly the same plus a few drive/boat/bike clips those creators uploaded.
+Regenerate these tables with `python -m datasets.prep.spatialvid_hq.card_counts --tree <tree>`.
+
 ## 4. Stores (fmt × resolution × fps)
 
 | store | frames | bytes | notes |
