@@ -40,6 +40,17 @@ register(DatasetConfig(
         "num_records": 365_296,
         "num_train": 186_710, "num_val": 15_029, "num_test": 11_364,           # person_carried_v0 ∩ v3
         "poses": "world->camera [tx ty tz qx qy qz qw], OpenCV axes, non-metric scale; ~5 Hz, interpolate with ds.poses_at",
-        "stats": {},                                                            # per-store rgb stats: not computed yet
+        # Per-store RGB frame stats on [0, 1] (prep/spatialvid_hq/stats.py, 2026-09-18: 4,000 (456x256) / 2,000 (640x360)
+        # seeded 8 s train-population windows at 15 Hz, decoder resize 224, exact uint8 histogram on a 4x4 stride).
+        # All six agree to ~0.005; "rgb" is the fallback for any store not listed. Source JSON: <tree>/index/stats_*.json.
+        "stats": {
+            "rgb": {"mean": (0.434, 0.426, 0.407), "std": (0.231, 0.228, 0.251)},
+            "spatialvid-hq-h265-456x256":       {"mean": (0.436378, 0.427394, 0.409534), "std": (0.230930, 0.228455, 0.251683)},
+            "spatialvid-hq-h265-456x256-30fps": {"mean": (0.434145, 0.426447, 0.408044), "std": (0.229374, 0.226503, 0.249886)},
+            "spatialvid-hq-h265-456x256-15fps": {"mean": (0.431815, 0.424298, 0.406280), "std": (0.230099, 0.227918, 0.251444)},
+            "spatialvid-hq-h265-640x360":       {"mean": (0.434176, 0.425239, 0.404285), "std": (0.231950, 0.229325, 0.251976)},
+            "spatialvid-hq-h265-640x360-30fps": {"mean": (0.432961, 0.424706, 0.404042), "std": (0.231258, 0.228758, 0.250860)},
+            "spatialvid-hq-h265-640x360-15fps": {"mean": (0.432552, 0.426263, 0.406928), "std": (0.232041, 0.229050, 0.251962)},
+        },
     },
 ))

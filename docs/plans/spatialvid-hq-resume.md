@@ -59,9 +59,18 @@ Fleet access (ssh, container, paths, rules): the global `/workstation` skill.
 2. ~~Benchmark~~ done 2026-09-18 (design doc §3): NVMe warm 163 / 139 / 121 windows/s for 15 fps / 30 fps / native
    (decode-bound, cold ≈ warm); off the QNAP CIFS mount epoch 1 = 84, epochs 2+ = 163 (×1.95, page cache).
    `load(..., fps="native")` added (`6d99f0e`) because `default_rate_hz` otherwise routes to the 15 fps store.
-3. Turn `/tmp/demo_e2e.py` into `notebooks/spatialvid_hq_loader_demo.ipynb` (seed-reproducible batch + trajectories, cold vs warm throughput).
-4. Per-store normalization stats → `metadata["stats"]` in `_configs/spatialvid_hq.py`.
-5. Dataset card (next-steps §2): population definition, v3 split, channel concentration, exclusions, fps stores.
+3. ~~Demo notebook~~ done: `notebooks/spatialvid_hq_loader_demo.{py,ipynb}` (percent script is the source; `scripts/py2nb.py`
+   builds the ipynb; executed on machina with nbconvert, outputs stripped on commit by nbstripout). Shows frames + true
+   frame times, `poses_at` → [B,T,7], **`ego_motion_at` → poses + [B,T-1,6] deltas `[dx dy dz rx ry rz]` in the previous
+   frame's camera axes** (the CNN+RNN ego-motion input; delta t pairs with frame t+1, zero-pad frame 0), trajectories,
+   seed reproducibility, disk → page-cache throughput. Helpers: `video.ego_motion`, `video.camera_centers` (batched,
+   float64 inside; `relative_motion` is the pairwise reference and now also float64 — float32 arccos was off by ~1e-3 rad).
+4. ~~Per-store RGB stats~~ done 2026-09-18: `datasets/prep/spatialvid_hq/stats.py` (uint8 histogram over seeded train windows,
+   4x4 stride); all six stores in `metadata["stats"]` (≈ mean 0.434/0.426/0.407, std 0.231/0.228/0.251; agree to ~0.005),
+   source JSON `<tree>/index/stats_{456x256,640x360}.json` (+ S3). `ds.stats` is the per-store entry.
+5. ~~Dataset card~~ first version: `datasets/cards/spatialvid-hq.md` (source/license/citation, record fields, counts, stores,
+   the 66 exclusions, population definition + channel concentration, v3 split incl. table-rows-vs-population, caveats,
+   versions). License line needs a check against the HF card before any external use.
 6. Later: per-clip stabilisation / gait statistics from poses; VLM audit sample for carrier precision; RA-4M prep (`datasets/prep/relate_anything_4M/SEED.md`, questions listed there).
 
 ## How to resume, mechanically
