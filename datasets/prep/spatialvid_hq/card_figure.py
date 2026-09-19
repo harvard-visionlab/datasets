@@ -46,8 +46,8 @@ def main():
     for j in show:
         ax.annotate(f"frame {j}", (c[j, 0], c[j, 2]), textcoords="offset points", xytext=(6, -3), fontsize=8)
     ax.set_aspect("equal", adjustable="datalim"); ax.grid(alpha=.3); ax.set_xlabel("x (right)"); ax.set_ylabel("z (forward at t = 0)")
-    ax.set_title("camera position, top-down\n(one dot per frame; per-clip units, not metres)", fontsize=10)
-    fig.colorbar(sc, ax=ax, label="t (s)", fraction=0.05, pad=0.03); ax.set_xmargin(0.25)
+    ax.set_title("camera position, top-down\n(one dot per frame, coloured by time in s; per-clip units, not metres)", fontsize=10)
+    fig.colorbar(sc, ax=ax, fraction=0.05, pad=0.03, ticks=[0, 2, 4, 6, 8])
     ax = fig.add_subplot(gs[1, 2:])
     ax.plot(tt[1:], ego[k, :, 2], label="dz  forward"); ax.plot(tt[1:], ego[k, :, 0], label="dx  sideways"); ax.plot(tt[1:], ego[k, :, 1], label="dy  vertical")
     ax.grid(alpha=.3); ax.legend(fontsize=9, loc="center right"); ax.set_xlabel("t (s)"); ax.set_ylabel("pose units / frame")
