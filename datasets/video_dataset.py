@@ -150,6 +150,36 @@ class WindowSampler:
         return recs.astype(np.int64), (rng.random(len(recs)) * mx).astype(np.float32)
 
 
+# ----------------------------------------------------------------------------- vectorised .npy parsing
+
+_NPY_PREFIX = {np.dtype("<f4"): b"{'descr': '<f4', 'fortran_order': False, 'shape': (",
+               np.dtype("<i4"): b"{'descr': '<i4', 'fortran_order': False, 'shape': ("}
+
+
+def _npy_rows(data: np.ndarray, sizes: np.ndarray, dtype: np.dtype, row: int) -> tuple[np.ndarray, np.ndarray]:
+    """B `.npy` blobs of dtype `dtype` and trailing dim `row`, packed in a (B, W) uint8 buffer with `sizes` -> values
+    (B, N, row) [padding undefined] and counts (B,). Vectorised when every blob has the same v1.0 header length and
+    the expected descr (np.save of small C arrays always does); otherwise falls back to np.load per blob."""
+    data = np.asarray(data); sizes = np.asarray(sizes, dtype=np.int64); B = len(sizes)
+    prefix = np.frombuffer(_NPY_PREFIX[dtype], dtype=np.uint8)
+    hl = data[:, 8].astype(np.int64) | (data[:, 9].astype(np.int64) << 8)             # v1.0 HEADER_LEN (little-endian)
+    ok = (B > 0 and (data[:, :6] == np.frombuffer(b"\x93NUMPY", np.uint8)).all() and (data[:, 6] == 1).all()
+          and (hl == hl[0]).all() and (data[:, 10:10 + len(prefix)] == prefix).all())
+    if ok:
+        H = 10 + int(hl[0]); item = dtype.itemsize * row
+        n = (sizes - H) // item
+        if ((sizes - H) % item == 0).all() and H + int(n.max()) * item <= data.shape[1]:
+            vals = np.ascontiguousarray(data[:, H:H + int(n.max()) * item]).view(dtype).reshape(B, -1, row)
+            return vals, n
+    from .video import _npy
+    arrs = [_npy(data[i][: int(sizes[i])]).reshape(-1, row) for i in range(B)]
+    n = np.fromiter((len(a) for a in arrs), dtype=np.int64, count=B)
+    vals = np.zeros((B, int(n.max()), row), dtype=dtype)
+    for i, a in enumerate(arrs):
+        vals[i, : n[i]] = a
+    return vals, n
+
+
 # ----------------------------------------------------------------------------- the dataset object
 
 @dataclass
@@ -219,23 +249,24 @@ class VideoDataset:
 
     def _annot_batch(self, recs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Annotations of B records, padded to the longest: poses (B, N, 7) float64, times (B, N) seconds (padding
-        = +inf), n_annot (B,). One store read per field for the whole batch; the only per-record work is parsing
-        the small .npy blobs."""
-        from .video import _npy
+        = +inf), n_annot (B,). One store read per field for the whole batch and no per-record Python: the .npy blobs
+        share a fixed header, so the values are a strided view of the read buffer (`_npy_rows`)."""
         f = self.cache.fields
         recs = np.asarray(recs, dtype=np.int64)
         B = len(recs)
-        def blobs(name):
-            out = f[name].load_batch(recs, parallel=False)
-            return [_npy(out["data"][i][: int(out["sizes"][i])]) for i in range(B)]   # parse before the buffer is reused
-        poses = blobs("poses"); fidx = blobs("annot_frame_idx")
+        out = f["poses"].load_batch(recs, parallel=False)
+        pose_vals, n_pose = _npy_rows(out["data"], out["sizes"], np.dtype("<f4"), 7)
+        out = f["annot_frame_idx"].load_batch(recs, parallel=False)
+        fidx, n = _npy_rows(out["data"], out["sizes"], np.dtype("<i4"), 1)
+        fidx = fidx.reshape(B, -1)
         fps_field = "src_fps" if "src_fps" in f else "fps"
         src_fps = np.asarray(f[fps_field].load_batch(recs, parallel=False)["data"], dtype=np.float64).reshape(B)
-        n = np.fromiter((len(x) for x in fidx), dtype=np.int64, count=B)
-        N = int(n.max())
-        P = np.zeros((B, N, 7), dtype=np.float64); T = np.full((B, N), np.inf, dtype=np.float64)
-        for i in range(B):
-            P[i, : n[i]] = poses[i].reshape(-1, 7); T[i, : n[i]] = fidx[i] / src_fps[i]
+        if not np.array_equal(n, n_pose):
+            raise ValueError("poses / annot_frame_idx row counts differ (records not in a consistent store)")
+        N = fidx.shape[1]
+        valid = np.arange(N)[None, :] < n[:, None]
+        P = pose_vals.astype(np.float64); P[~valid] = 0.0
+        T = np.where(valid, fidx.astype(np.float64) / src_fps[:, None], np.inf)
         return P, T, n
 
     def poses_at(self, recs, t_sec) -> np.ndarray:

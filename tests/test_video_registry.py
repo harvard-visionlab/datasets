@@ -4,8 +4,8 @@ import pandas as pd
 import pytest
 
 from visionlab.datasets.registry import get_config
-from visionlab.datasets.video import camera_center, camera_centers, ego_motion, interpolate_poses, relative_motion
-from visionlab.datasets.video_dataset import VideoDataset, WindowSampler, rank_stores, select_clips
+from visionlab.datasets.video import camera_center, camera_centers, ego_motion, interpolate_poses, interpolate_poses_batched, relative_motion
+from visionlab.datasets.video_dataset import VideoDataset, WindowSampler, _npy_rows, rank_stores, select_clips
 
 STORES = get_config("spatialvid-hq").stores
 
@@ -113,6 +113,44 @@ def test_ego_motion_forward_walk_is_positive_dz():
 def test_poses_at_batched(monkeypatch):
     records, *_ = _tables()
     ds = VideoDataset("x", ("h265", "456x256", None), None, None, records, "all", None, 15)
-    monkeypatch.setattr(ds, "_annot", lambda rec: (np.array([[rec, 0, 0, 0, 0, 0, 1], [rec + 1, 0, 0, 0, 0, 0, 1]], np.float32), np.array([0.0, 1.0])))
+    def annot_batch(recs):
+        recs = np.asarray(recs, np.float64)
+        P = np.zeros((len(recs), 2, 7)); P[:, 0, 0] = recs; P[:, 1, 0] = recs + 1; P[:, :, 6] = 1
+        return P, np.tile([0.0, 1.0], (len(recs), 1)), np.full(len(recs), 2)
+    monkeypatch.setattr(ds, "_annot_batch", annot_batch)
     out = ds.poses_at(np.array([3, 5]), np.array([[0.0, 0.5], [0.25, 1.0]]))
     assert out.shape == (2, 2, 7) and np.allclose(out[:, :, 0], [[3.0, 3.5], [5.25, 6.0]])
+
+
+def test_interpolate_poses_batched_matches_per_record():
+    rng = np.random.default_rng(0)
+    B, T = 6, 40
+    n = np.array([1, 2, 5, 17, 33, 90]); N = n.max()
+    P = np.zeros((B, N, 7)); Ta = np.full((B, N), np.inf); t = np.empty((B, T))
+    for b in range(B):
+        Ta[b, : n[b]] = np.sort(rng.random(n[b])) * 10 if n[b] > 1 else [2.0]
+        q = rng.normal(size=(n[b], 4)); q /= np.linalg.norm(q, axis=1, keepdims=True)
+        P[b, : n[b]] = np.concatenate([rng.normal(size=(n[b], 3)), q], axis=1)
+        t[b] = np.linspace(-1, 11, T)                                     # runs past both ends -> clamped
+    out = interpolate_poses_batched(P, Ta, n, t)
+    for b in range(B):
+        ref = interpolate_poses(P[b, : n[b]], Ta[b, : n[b]], t[b])
+        assert np.allclose(out[b], ref, atol=1e-6), b
+
+
+def test_npy_rows_vectorised_and_fallback():
+    import io
+    arrs = [np.arange(k * 7, dtype="<f4").reshape(k, 7) for k in (1, 63, 90)]
+    def pack(blobs):
+        sizes = np.array([len(b) for b in blobs]); data = np.zeros((len(blobs), sizes.max()), np.uint8)
+        for i, b in enumerate(blobs):
+            data[i, : len(b)] = b
+        return data, sizes
+    def blob(a, version=None):
+        buf = io.BytesIO(); np.lib.format.write_array(buf, a, version=version); return np.frombuffer(buf.getvalue(), np.uint8)
+    data, sizes = pack([blob(a) for a in arrs])                            # uniform v1.0 headers -> strided view
+    vals, n = _npy_rows(data, sizes, np.dtype("<f4"), 7)
+    assert list(n) == [1, 63, 90] and all(np.array_equal(vals[i, : n[i]], arrs[i]) for i in range(3))
+    data, sizes = pack([blob(arrs[0]), blob(arrs[1], version=(2, 0)), blob(arrs[2])])   # a v2.0 header -> np.load fallback
+    vals, n = _npy_rows(data, sizes, np.dtype("<f4"), 7)
+    assert list(n) == [1, 63, 90] and all(np.array_equal(vals[i, : n[i]], arrs[i]) for i in range(3))
