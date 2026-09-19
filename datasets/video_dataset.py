@@ -217,9 +217,38 @@ class VideoDataset:
             self._annot_cache[rec] = a
         return a
 
+    def _annot_batch(self, recs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Annotations of B records, padded to the longest: poses (B, N, 7) float64, times (B, N) seconds (padding
+        = +inf), n_annot (B,). One store read per field for the whole batch; the only per-record work is parsing
+        the small .npy blobs."""
+        from .video import _npy
+        f = self.cache.fields
+        recs = np.asarray(recs, dtype=np.int64)
+        B = len(recs)
+        def blobs(name):
+            out = f[name].load_batch(recs, parallel=False)
+            return [_npy(out["data"][i][: int(out["sizes"][i])]) for i in range(B)]   # parse before the buffer is reused
+        poses = blobs("poses"); fidx = blobs("annot_frame_idx")
+        fps_field = "src_fps" if "src_fps" in f else "fps"
+        src_fps = np.asarray(f[fps_field].load_batch(recs, parallel=False)["data"], dtype=np.float64).reshape(B)
+        n = np.fromiter((len(x) for x in fidx), dtype=np.int64, count=B)
+        N = int(n.max())
+        P = np.zeros((B, N, 7), dtype=np.float64); T = np.full((B, N), np.inf, dtype=np.float64)
+        for i in range(B):
+            P[i, : n[i]] = poses[i].reshape(-1, 7); T[i, : n[i]] = fidx[i] / src_fps[i]
+        return P, T, n
+
     def poses_at(self, recs, t_sec) -> np.ndarray:
         """World->camera poses [B, T, 7] ([tx ty tz qx qy qz qw]) interpolated (linear t, slerp q) to the frame times
-        `t_sec` [B, T] of records `recs` [B] (e.g. `batch["video_rec"]`, `batch["video_t_sec"]`)."""
+        `t_sec` [B, T] of records `recs` [B] (e.g. `batch["video_rec"]`, `batch["video_t_sec"]`). Vectorised over
+        the batch (padded annotations, batched searchsorted); no per-record Python math."""
+        from .video import interpolate_poses_batched
+        recs = np.asarray(recs).reshape(-1); t = np.asarray(t_sec, dtype=np.float64).reshape(len(recs), -1)
+        P, T, n = self._annot_batch(recs)
+        return interpolate_poses_batched(P, T, n, t)
+
+    def poses_at_loop(self, recs, t_sec) -> np.ndarray:
+        """Reference implementation of `poses_at`: one `interpolate_poses` call per record (kept for tests)."""
         from .video import interpolate_poses
         recs = np.asarray(recs).reshape(-1); t = np.asarray(t_sec, dtype=np.float64).reshape(len(recs), -1)
         out = np.empty((len(recs), t.shape[1], 7), dtype=np.float32)

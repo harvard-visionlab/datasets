@@ -196,6 +196,27 @@ def interpolate_poses(poses: np.ndarray, annot_frame_idx: np.ndarray, frame_idx:
     return np.concatenate([pos, q], axis=1).astype(np.float32)
 
 
+def interpolate_poses_batched(poses: np.ndarray, t_annot: np.ndarray, n_annot: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Batched `interpolate_poses` over ragged annotation sets.
+
+    poses (B, N, 7) and t_annot (B, N) are padded to the longest record (padding times must be +inf), n_annot (B,)
+    the valid counts, t (B, T) the query times. Returns (B, T, 7) float32; queries outside a record's annotated
+    range are clamped to its first/last pose, as in `interpolate_poses`.
+    """
+    P = np.asarray(poses, np.float64); Ta = np.asarray(t_annot, np.float64); t = np.asarray(t, np.float64)
+    n = np.asarray(n_annot, np.int64)
+    last = np.take_along_axis(Ta, (n - 1)[:, None], 1)                          # (B, 1)
+    t = np.clip(t, Ta[:, :1], last)
+    j = (Ta[:, None, :] <= t[:, :, None]).sum(-1)                                # searchsorted(side="right") per row
+    j = np.clip(j, 1, np.maximum(n - 1, 0)[:, None]); i = np.maximum(j - 1, 0)   # n == 1: i = j = 0
+    ti = np.take_along_axis(Ta, i, 1); tj = np.take_along_axis(Ta, j, 1)
+    pi = np.take_along_axis(P, i[..., None], 1); pj = np.take_along_axis(P, j[..., None], 1)
+    w = np.where(tj > ti, (t - ti) / np.maximum(tj - ti, 1e-9), 0.0)
+    pos = (1 - w)[..., None] * pi[..., :3] + w[..., None] * pj[..., :3]
+    q = quat_slerp(pi[..., 3:], pj[..., 3:], w)
+    return np.concatenate([pos, q], axis=-1).astype(np.float32)
+
+
 def quat_to_rotmat(q: np.ndarray) -> np.ndarray:
     x, y, z, w = np.asarray(q, np.float64)        # float64: arccos of the trace is ill-conditioned for small angles in float32
     return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
