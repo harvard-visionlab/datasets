@@ -1,8 +1,8 @@
 """Per-store RGB normalisation stats for the SpatialVID-HQ video stores (→ `metadata["stats"][<store>]` in the config).
 
 Decodes seeded 8 s windows at 15 Hz from the *train* population with the same `DecodeVideoWindow` stage training uses
-(decoder-side resize to the model input), accumulates per-channel sum / sum of squares in float64 over every frame, and
-prints a JSON block to paste into `_configs/spatialvid_hq.py`. Frame-level stats are what `normalize(mean, std)` expects
+(decoder-side resize to the model input), accumulates an exact per-channel uint8 histogram over every frame (4x4 spatial
+stride), and prints a JSON block to paste into `_configs/spatialvid_hq.py`. Frame-level stats are what `normalize(mean, std)` expects
 on [0, 1] floats. The three fps variants of one resolution differ only by decimation, so their stats agree to ~1e-3;
 each is measured anyway so the config never has to guess.
 
@@ -22,7 +22,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
 
-def store_stats(res: str, fps, n_clips: int, T: int, rate: float, resize: int, workers: int, seed: int, split: str) -> dict:
+def store_stats(res: str, fps, n_clips: int, T: int, rate: float, resize: int, workers: int, seed: int, split: str, stride: int = 4) -> dict:
     import torch
     torch.set_num_threads(1)
     from slipstream.dataset import SlipstreamDataset
@@ -39,15 +39,23 @@ def store_stats(res: str, fps, n_clips: int, T: int, rate: float, resize: int, w
     loader = SlipstreamLoader(SlipstreamDataset(local_dir=str(ds.store_dir)), batch_size=8, shuffle=True, seed=seed, drop_last=False,
                               indices=recs, sample_data={"t0": t0}, batches_ahead=8, image_field="video", pipelines={"video": [stage]},
                               verbose=False)
-    s = np.zeros(3); ss = np.zeros(3); n = 0; t = time.perf_counter()
+    # Per-channel histogram of uint8 values (exact, no float pass over 256 M elements per batch) on a 4x4 spatial stride:
+    # ~1/16 of the pixels, still ~10^8 samples per store, and the reduction stays far cheaper than the decode.
+    hist = torch.zeros(3, 256, dtype=torch.int64); t = time.perf_counter(); n_batches = 0
     for batch in loader:
-        v = batch["video"].to(torch.float64).div_(255)                   # [B, T, 3, H, W]
-        s += v.sum(dim=(0, 1, 3, 4)).numpy(); ss += v.pow(2).sum(dim=(0, 1, 3, 4)).numpy()
-        n += v.shape[0] * v.shape[1] * v.shape[3] * v.shape[4]
+        v = batch["video"][:, :, :, ::stride, ::stride]                  # [B, T, 3, H/4, W/4] uint8
+        for c in range(3):
+            hist[c] += torch.bincount(v[:, :, c].reshape(-1), minlength=256)
+        n_batches += 1
+        if n_batches % 100 == 0:
+            print(f"  {ds.store_dir.name}: {n_batches} batches, {n_batches * 8 / (time.perf_counter() - t):.0f} windows/s", flush=True)
     loader.shutdown()
-    mean = s / n; std = np.sqrt(ss / n - mean ** 2)
+    levels = torch.arange(256, dtype=torch.float64) / 255
+    h = hist.to(torch.float64); n = int(h[0].sum())
+    mean = (h * levels).sum(1) / n; std = torch.sqrt((h * levels ** 2).sum(1) / n - mean ** 2)
+    mean, std = mean.numpy(), std.numpy()
     out = dict(store=ds.store_dir.name, split=split, subset=ds.subset, windows=int(len(recs)), frames=int(len(recs) * T),
-               pixels=int(n), resize=resize, rate_hz=rate, T=T, seed=seed,
+               pixel_samples=n, spatial_stride=stride, resize=resize, rate_hz=rate, T=T, seed=seed,
                mean=[round(float(x), 6) for x in mean], std=[round(float(x), 6) for x in std], seconds=round(time.perf_counter() - t, 1))
     print(json.dumps(out), flush=True)
     return out
