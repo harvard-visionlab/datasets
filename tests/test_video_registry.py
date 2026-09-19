@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from visionlab.datasets.registry import get_config
-from visionlab.datasets.video import interpolate_poses
+from visionlab.datasets.video import camera_center, camera_centers, ego_motion, interpolate_poses, relative_motion
 from visionlab.datasets.video_dataset import VideoDataset, WindowSampler, rank_stores, select_clips
 
 STORES = get_config("spatialvid-hq").stores
@@ -83,6 +83,32 @@ def test_interpolate_poses_in_seconds():
     out = interpolate_poses(poses, t_annot, np.array([0.1, 0.3, 0.9]))
     assert np.allclose(out[:, 0], [0.5, 1.5, 2.0])                      # linear, clamped after the last annotation
     assert np.allclose(np.linalg.norm(out[:, 3:], axis=1), 1)
+
+
+def _random_poses(rng, shape):
+    q = rng.normal(size=shape + (4,)); q /= np.linalg.norm(q, axis=-1, keepdims=True)
+    return np.concatenate([rng.normal(size=shape + (3,)), q], axis=-1).astype(np.float32)
+
+
+def test_ego_motion_matches_pairwise_reference():
+    rng = np.random.default_rng(0)
+    p = _random_poses(rng, (2, 5))                                       # [B=2, T=5, 7]
+    d = ego_motion(p)
+    assert d.shape == (2, 4, 6) and d.dtype == np.float32
+    p64 = p.astype(np.float64)                                           # the pairwise reference computes in the input dtype
+    for b in range(2):
+        for t in range(4):
+            assert np.allclose(d[b, t], relative_motion(p64[b, t], p64[b, t + 1]), atol=1e-5)
+    assert np.allclose(camera_centers(p)[1, 3], camera_center(p[1, 3]), atol=1e-6)
+    assert np.allclose(ego_motion(np.repeat(p[:, :1], 3, axis=1)), 0)   # no motion → zero deltas (incl. the angle≈0 branch)
+
+
+def test_ego_motion_forward_walk_is_positive_dz():
+    # camera moving along its own +z (forward) with identity rotation: world->camera t = -c
+    c = np.stack([np.zeros(6), np.zeros(6), np.arange(6) * 0.1], axis=1)
+    p = np.concatenate([-c, np.tile([0, 0, 0, 1], (6, 1))], axis=1).astype(np.float32)
+    d = ego_motion(p)
+    assert np.allclose(d[:, 2], 0.1, atol=1e-6) and np.allclose(d[:, [0, 1, 3, 4, 5]], 0, atol=1e-6)
 
 
 def test_poses_at_batched(monkeypatch):

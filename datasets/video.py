@@ -216,6 +216,50 @@ def camera_center(pose: np.ndarray) -> np.ndarray:
     R = quat_to_rotmat(pose[3:]); return -R.T @ pose[:3]
 
 
+def quats_to_rotmats(q: np.ndarray) -> np.ndarray:
+    """(..., 4) [qx qy qz qw] -> (..., 3, 3), vectorised `quat_to_rotmat`."""
+    q = np.asarray(q, np.float64); x, y, z, w = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    R = np.empty(q.shape[:-1] + (3, 3))
+    R[..., 0, 0] = 1 - 2 * (y * y + z * z); R[..., 0, 1] = 2 * (x * y - z * w); R[..., 0, 2] = 2 * (x * z + y * w)
+    R[..., 1, 0] = 2 * (x * y + z * w); R[..., 1, 1] = 1 - 2 * (x * x + z * z); R[..., 1, 2] = 2 * (y * z - x * w)
+    R[..., 2, 0] = 2 * (x * z - y * w); R[..., 2, 1] = 2 * (y * z + x * w); R[..., 2, 2] = 1 - 2 * (x * x + y * y)
+    return R
+
+
+def rotmats_to_rotvecs(R: np.ndarray) -> np.ndarray:
+    """(..., 3, 3) -> (..., 3) rotation vectors (axis * angle, radians), vectorised `rotmat_to_rotvec`."""
+    tr = np.trace(R, axis1=-2, axis2=-1)
+    angle = np.arccos(np.clip((tr - 1) / 2, -1, 1))
+    axis = np.stack([R[..., 2, 1] - R[..., 1, 2], R[..., 0, 2] - R[..., 2, 0], R[..., 1, 0] - R[..., 0, 1]], axis=-1)
+    s = 2 * np.sin(angle)
+    small = angle < 1e-8
+    axis = axis / np.where(small, 1.0, s)[..., None]
+    return np.where(small[..., None], 0.0, axis * angle[..., None])
+
+
+def ego_motion(poses: np.ndarray) -> np.ndarray:
+    """Frame-to-frame ego-motion of a pose sequence: (..., T, 7) world->camera poses -> (..., T-1, 6) deltas.
+
+    Delta t is the motion from frame t to frame t+1 expressed in camera-t axes (OpenCV: x right, y down, z forward):
+    `[dx, dy, dz, rx, ry, rz]`, translation in the (non-metric) pose units, rotation as a rotation vector in radians.
+    Vectorised `relative_motion` over consecutive frames, so `ego_motion(p)[..., t, :] == relative_motion(p[t], p[t+1])`.
+    A constant walking speed shows up as a steady +dz; turning as ry. Camera centres in world axes: `camera_centers`.
+    """
+    p = np.asarray(poses, np.float64)
+    R = quats_to_rotmats(p[..., 3:])                                  # (..., T, 3, 3) world->camera rotations
+    c = -np.einsum("...ji,...j->...i", R, p[..., :3])                 # camera centres in world axes: -R^T t
+    R0, R1 = R[..., :-1, :, :], R[..., 1:, :, :]
+    dpos = np.einsum("...ij,...j->...i", R0, c[..., 1:, :] - c[..., :-1, :])
+    drot = rotmats_to_rotvecs(R1 @ np.swapaxes(R0, -1, -2))
+    return np.concatenate([dpos, drot], axis=-1).astype(np.float32)
+
+
+def camera_centers(poses: np.ndarray) -> np.ndarray:
+    """(..., 7) world->camera poses -> (..., 3) camera centres in world axes (the trajectory to plot)."""
+    p = np.asarray(poses, np.float64)
+    return (-np.einsum("...ji,...j->...i", quats_to_rotmats(p[..., 3:]), p[..., :3])).astype(np.float32)
+
+
 def relative_motion(p0: np.ndarray, p1: np.ndarray) -> np.ndarray:
     """Motion from frame 0 to frame 1 expressed in camera-0 axes (OpenCV: x right, y down, z forward).
 

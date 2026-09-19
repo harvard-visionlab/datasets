@@ -221,6 +221,14 @@ class VideoDataset:
             out[i] = interpolate_poses(poses, t_annot, t[i])
         return out
 
+    def ego_motion_at(self, recs, t_sec) -> tuple[np.ndarray, np.ndarray]:
+        """(poses [B, T, 7], deltas [B, T-1, 6]) at the frame times: the interpolated world->camera poses and the
+        frame-to-frame ego-motion `[dx dy dz rx ry rz]` in camera-t axes (see `video.ego_motion`). Delta t pairs with
+        frame t+1: the motion the camera made *since the last frame*."""
+        from .video import ego_motion
+        poses = self.poses_at(recs, t_sec)
+        return poses, ego_motion(poses)
+
     def __repr__(self) -> str:
         fmt, res, fps = self.store_key
         return (f"VideoDataset({self.name!r}, split={self.split!r}, subset={self.subset!r}, store={fmt}/{res}/{fps or 'native'}fps, "
