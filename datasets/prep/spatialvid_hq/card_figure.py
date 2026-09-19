@@ -37,7 +37,7 @@ def main():
     print(f"record {rec} clip {row.clip_id} channel {row.channel_title!r} net yaw {yaw[k]:.0f} deg, t0 {t[k, 0]:.2f} s")
 
     c = camera_centers(poses[k]); tt = t[k] - t[k, 0]; show = np.linspace(0, T - 1, 6).astype(int)
-    fig = plt.figure(figsize=(16, 9.5)); gs = fig.add_gridspec(3, 6, height_ratios=[1.3, 1.7, 1.0], hspace=0.55, wspace=0.35)
+    fig = plt.figure(figsize=(16, 9)); gs = fig.add_gridspec(3, 6, height_ratios=[1.3, 1.7, 1.0], hspace=0.55, wspace=0.55)
     for col, j in enumerate(show):
         ax = fig.add_subplot(gs[0, col]); ax.imshow(frames[k, j].permute(1, 2, 0).numpy()); ax.axis("off")
         ax.set_title(f"frame {j}   t = {tt[j]:.1f} s", fontsize=10)
@@ -47,7 +47,7 @@ def main():
         ax.annotate(f"frame {j}", (c[j, 0], c[j, 2]), textcoords="offset points", xytext=(6, -3), fontsize=8)
     ax.set_aspect("equal", adjustable="datalim"); ax.grid(alpha=.3); ax.set_xlabel("x (right)"); ax.set_ylabel("z (forward at t = 0)")
     ax.set_title("camera position, top-down\n(one dot per frame; per-clip units, not metres)", fontsize=10)
-    fig.colorbar(sc, ax=ax, label="t (s)", fraction=0.05, pad=0.04)
+    fig.colorbar(sc, ax=ax, label="t (s)", fraction=0.05, pad=0.03); ax.set_xmargin(0.25)
     ax = fig.add_subplot(gs[1, 2:])
     ax.plot(tt[1:], ego[k, :, 2], label="dz  forward"); ax.plot(tt[1:], ego[k, :, 0], label="dx  sideways"); ax.plot(tt[1:], ego[k, :, 1], label="dy  vertical")
     ax.grid(alpha=.3); ax.legend(fontsize=9, loc="center right"); ax.set_xlabel("t (s)"); ax.set_ylabel("pose units / frame")
@@ -59,7 +59,7 @@ def main():
         ax.axvline(tt[j], color="0.8", lw=0.8, zorder=0)
     ax.grid(alpha=.3); ax.legend(fontsize=9, ncol=3, loc="lower right"); ax.set_xlabel("t (s)"); ax.set_ylabel("deg / frame")
     ax.set_title(f"ego-motion rotation per frame (net yaw over the window {yaw[k]:+.0f}°); grey lines mark the frames shown above", fontsize=10)
-    fig.suptitle(f"SpatialVID-HQ: one 8 s window at 15 Hz  (val split, walking, channel \u201c{row.channel_title}\u201d)", fontsize=12, y=0.99)
+    fig.suptitle(f"SpatialVID-HQ: one 8 s window at 15 Hz  (val split, walking, channel \u201c{row.channel_title}\u201d)", fontsize=12, y=0.93)
     fig.savefig(a.out, dpi=110, bbox_inches="tight"); print("wrote", a.out)
 
 
