@@ -156,7 +156,10 @@ print("cnn input", tuple(x_frames.shape), "| rnn side input", tuple(ego.shape), 
 print("per-batch ego-motion scale (std):", np.round(ego.std(dim=(0, 1)).numpy(), 4), " ← normalise per dataset before the RNN")
 
 # %% [markdown]
-# ## 5. Seed reproducibility and throughput (cold disk → warm page cache)
+# ## 5. Seed reproducibility and throughput (disk → page cache)
+#
+# (Earlier cells already touched part of these 1,024 clips, so the first residency is not 0; the standalone benchmark
+# `benchmarks/bench_spatialvid_window.py --drop-cache` evicts the pages first.)
 
 # %%
 def first_batch_signature(seed):

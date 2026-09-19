@@ -197,7 +197,7 @@ def interpolate_poses(poses: np.ndarray, annot_frame_idx: np.ndarray, frame_idx:
 
 
 def quat_to_rotmat(q: np.ndarray) -> np.ndarray:
-    x, y, z, w = q
+    x, y, z, w = np.asarray(q, np.float64)        # float64: arccos of the trace is ill-conditioned for small angles in float32
     return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
                      [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
                      [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
@@ -266,6 +266,7 @@ def relative_motion(p0: np.ndarray, p1: np.ndarray) -> np.ndarray:
     Returns (6,): [dx, dy, dz, rx, ry, rz] with translation in the (non-metric) pose units and rotation as a
     rotation vector in radians. Convention matches the authors' get_instructions.py.
     """
+    p0, p1 = np.asarray(p0, np.float64), np.asarray(p1, np.float64)
     R0, R1 = quat_to_rotmat(p0[3:]), quat_to_rotmat(p1[3:])
     dpos = R0 @ (camera_center(p1) - camera_center(p0))
     drot = rotmat_to_rotvec(R1 @ R0.T)

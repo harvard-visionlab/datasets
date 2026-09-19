@@ -95,10 +95,9 @@ def test_ego_motion_matches_pairwise_reference():
     p = _random_poses(rng, (2, 5))                                       # [B=2, T=5, 7]
     d = ego_motion(p)
     assert d.shape == (2, 4, 6) and d.dtype == np.float32
-    p64 = p.astype(np.float64)                                           # the pairwise reference computes in the input dtype
     for b in range(2):
         for t in range(4):
-            assert np.allclose(d[b, t], relative_motion(p64[b, t], p64[b, t + 1]), atol=1e-5)
+            assert np.allclose(d[b, t], relative_motion(p[b, t], p[b, t + 1]), atol=1e-5)
     assert np.allclose(camera_centers(p)[1, 3], camera_center(p[1, 3]), atol=1e-6)
     assert np.allclose(ego_motion(np.repeat(p[:, :1], 3, axis=1)), 0)   # no motion → zero deltas (incl. the angle≈0 branch)
 
