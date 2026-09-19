@@ -133,8 +133,14 @@ a rotation vector in radians). See Usage.
   (`notebooks/spatialvid_hq_loader_demo.ipynb`) plots frames next to the recovered camera path so you can judge for
   yourself.
 
-    _TODO: add a figure here: 6 frames of one window with the top-down camera path and the per-frame ego-motion
-    traces underneath._
+  The figure below is one such window, chosen for a clear turn. The buildings sweep from right to left across the
+  frames while the recovered path bends right and the yaw trace goes negative over the same seconds; that kind of
+  agreement between pixels and poses is what to look for. Note the steps in the per-frame traces: the source poses
+  are ~5 Hz and interpolated linearly, so frame-to-frame deltas are piecewise constant over ~3 frames at 15 Hz.
+
+  ![one 8 s window: frames, top-down camera path, ego-motion traces](figures/spatialvid-hq-window.png)
+
+  Regenerate with `python -m datasets.prep.spatialvid_hq.card_figure --out datasets/cards/figures/spatialvid-hq-window.png`.
 
 - **Text labels are machine-generated.** Captions and scene/weather/crowd tags were produced by vision-language
   models upstream and are noisy. Our `carrier` labels were reviewed by hand, but at the channel level, so a walking
@@ -235,7 +241,7 @@ does that for you.
 every decoded frame and `batch["video_rec"]` `[B]` the record index. `batch["poses"]` `[B, T, 7]` is the camera pose
 at each frame (`[tx ty tz qx qy qz qw]`, world→camera) and `batch["ego"]` `[B, T-1, 6]` the motion between
 consecutive frames, `[dx dy dz rx ry rz]`, in the earlier frame's camera axes: `ego[:, t-1]` is the move *into* frame
-`t`. Without the transform, `ds.ego_motion_at(batch["video_rec"], batch["video_t_sec"])` computes the same two
+`t`. Walking forward is a steady positive `dz`; because poses are world→camera, a right turn is a *negative* `ry`. Without the transform, `ds.ego_motion_at(batch["video_rec"], batch["video_t_sec"])` computes the same two
 arrays by hand. Per-channel RGB mean/std for normalisation are in `ds.stats`.
 
 The full walk-through, with plots, is `notebooks/spatialvid_hq_loader_demo.ipynb`.
