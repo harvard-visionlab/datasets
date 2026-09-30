@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.13.0] - 2026-09-30
+
+### Changed
+- **Install change: slipstream is declared as a range (`visionlab-slipstream>=0.9,<0.10`), not a git tag.**
+  Consumers must now pin slipstream themselves (any in-range tag, e.g. `@v0.9.2`), since it isn't on
+  PyPI; an install without that pin fails to resolve, and an out-of-range tag fails loudly. slipstream
+  patch releases no longer need a datasets release. See README "Installation".
+- datasets' own dev env/lock still pins slipstream v0.9.2 via `[tool.uv.sources]`. No API or stream changes.
+
 ## [0.12.1] - 2026-09-30
 
 ### Changed

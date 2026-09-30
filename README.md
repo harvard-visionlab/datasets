@@ -4,17 +4,26 @@ Visionlab dataset utilities for streaming datasets.
 
 ## Installation
 
-Install from GitHub:
+datasets requires `visionlab-slipstream>=0.9,<0.10` but doesn't pin a slipstream tag, and slipstream
+isn't on PyPI. **Pin slipstream yourself in the same install** (any tag in range); installing without
+it fails to resolve.
 
 ```bash
-pip install git+https://github.com/harvard-visionlab/datasets.git
+pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.2" \
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.13.0"
 ```
 
-Or with [uv](https://github.com/astral-sh/uv):
+Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 
-```bash
-uv pip install git+https://github.com/harvard-visionlab/datasets.git
+```toml
+dependencies = [
+    "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.13.0",
+    "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.2",
+]
 ```
+
+A slipstream tag outside the range (e.g. v0.8.0) fails resolution. The range only moves in a datasets
+minor release, because each slipstream minor so far has changed seeded streams.
 
 **Note:** This package automatically installs GPU-enabled PyTorch on Linux x86_64 systems (CUDA 12.1) and CPU-only PyTorch on macOS and other platforms.
 
