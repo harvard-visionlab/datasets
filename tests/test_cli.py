@@ -797,7 +797,7 @@ def test_fetch_files_auto_concurrency_per_file(tmp_path, monkeypatch):
     sizes = {"image.bin": 4_000_000_000, "label.npy": 4096}
     assert S.fetch_files("s3://b/c/", list(sizes), tmp_path, total_bytes=1, sizes=sizes, umask=0o002)
     assert seen["lines"] == [
-        f"cp --concurrency 16 s3://b/c/image.bin {tmp_path}/image.bin",
+        f"cp --concurrency 32 s3://b/c/image.bin {tmp_path}/image.bin",
         f"cp --concurrency 1 s3://b/c/label.npy {tmp_path}/label.npy",
     ]
     assert seen["umask"] == 0o002 and seen["cmd"][:3] == ["s5cmd", "--numworkers", "32"]

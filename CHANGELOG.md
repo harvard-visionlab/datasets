@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.16.1] - 2026-09-30
+
+### Changed
+- `sync --concurrency auto` uses 32 parts (was 16) for files >= 256 MB. FASRC -> S3 measured 31.9 MB/s at 16
+  vs 46.0 MB/s at 32.
+- `sync --source`: new `--chunk-mb` (default 64) to tune ranged-copy job size.
+
 ## [0.16.0] - 2026-09-30
 
 ### Changed

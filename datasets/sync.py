@@ -26,7 +26,7 @@ creates (lock, staging, files, dirs) is made group-writable regardless of the ca
 any group member can later repair or re-sync the cache. Personal (non-group-writable) bases are
 left to the umask.
 
-Sources: S3 via ``s5cmd run`` (per-file ``--concurrency``: ``auto`` = 16 parts for files
+Sources: S3 via ``s5cmd run`` (per-file ``--concurrency``: ``auto`` = 32 parts for files
 >= ``AUTO_CONCURRENCY_MIN_MB``, else 1), or a local/NFS copy of the same cache (``source_dir``,
 e.g. the lab_storage master) read with parallel ranged ``pread``/``pwrite`` into the staging dir.
 """
@@ -54,7 +54,7 @@ LOCK_SUFFIX = ".sync.lock"
 PARTIAL_SUFFIX = ".sync.partial"
 INCOMPLETE_MARKER = "SYNC_INCOMPLETE.json"
 COMMANDS_FILE = ".s5cmd-commands.txt"
-AUTO_CONCURRENCY = 16
+AUTO_CONCURRENCY = 32  # FASRC -> S3, one 3.8 GB file: 16 parts 31.9 MB/s, 32 parts 46.0 MB/s
 AUTO_CONCURRENCY_MIN_MB = 256
 HEARTBEAT_S = 60
 STALE_S = 15 * 60
@@ -678,6 +678,7 @@ def sync_cache(
     part_size_mb: int | None = None,
     source_dir: Path | None = None,
     readers: int = 16,
+    chunk_mb: int = 64,
     log: Callable[[str], None] = print,
 ) -> SyncResult:
     """Sync one cache into ``target`` from S3 (``remote``) or, with ``source_dir``, a local copy.
@@ -700,7 +701,7 @@ def sync_cache(
     def fetch(names: list[str], total: int, workers: int) -> bool:
         if source_dir is not None:
             return copy_local_files(Path(source_dir), names, staging, total_bytes=total, sizes=remote_files,
-                                    readers=readers, log=log)
+                                    readers=readers, chunk_mb=chunk_mb, log=log)
         return fetch_files(remote, names, staging, total_bytes=total, sizes=remote_files,
                            endpoint_url=endpoint_url, numworkers=workers, concurrency=concurrency,
                            part_size_mb=part_size_mb, umask=umask, log=log)

@@ -892,6 +892,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             part_size_mb=args.part_size,
             source_dir=sources[e.cache_name],
             readers=args.readers,
+            chunk_mb=args.chunk_mb,
             log=_print,
         )
         if res.ok:
@@ -1015,6 +1016,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--readers", type=int, default=16,
                     help="--source: parallel ranged readers (default: 16)")
+    sp.add_argument("--chunk-mb", type=int, default=64,
+                    help="--source: bytes per ranged read job, in MiB (default: 64)")
     sp.add_argument("--part-size", type=int, default=None, help="s5cmd multipart size in MiB (default: s5cmd's 50)")
     sp.add_argument("--endpoint-url", default=None, help="S3-compatible endpoint URL")
     sp.set_defaults(func=cmd_sync)

@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.5" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.16.0"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.16.1"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.16.0" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.16.1" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.5" }
 ```
 
@@ -95,10 +95,10 @@ or jobs:
   and dirs. So any group member can repair or re-sync the cache. `status` flags items without
   group write and prints the `chmod -R g+w` the owner should run. Personal cache dirs follow the umask.
 - **Sources.** From S3, big files download in parallel parts: `--concurrency auto` (the default)
-  uses 16 parts for files of 256 MB and up, 1 for the rest. Use `--concurrency 1` when writing to
+  uses 32 parts for files of 256 MB and up, 1 for the rest. Use `--concurrency 1` when writing to
   NFS that collapses under parallel part writes (e.g. /n/lab_storage). `--source DIR` copies from
   another directory holding the same caches (e.g. the lab_storage master) with `--readers`
-  parallel ranged reads (default 16). It uses the same lock, verify and manifest-last rules, and
+  parallel ranged reads (default 16; `--chunk-mb`, default 64, sets the size of each read). It uses the same lock, verify and manifest-last rules, and
   falls back to S3 for any cache that's missing or damaged there.
 
 Dataset names are the registry names shown by `list`; short aliases `in10`, `in100`,
