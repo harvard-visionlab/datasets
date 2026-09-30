@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [0.12.0] - 2026-09-29
+
+### Changed
+- **Breaking (reproducibility): slipstream pinned to 0.9.0.** Seeded augmentation/shuffle streams
+  differ from both 0.8.0 and 0.7.x for the same seed: every stream is keyed by `(seed, rank, epoch)`,
+  the loader reseeds decoders and seeded transforms each epoch (exact resume), DDP ranks draw
+  different augmentations, and per-view seeds are hashed (`slipstream.derive_seed`) instead of added.
+  Stay on datasets 0.11.0 (slipstream 0.8.0) or 0.10.0 (slipstream 0.7.1) to keep older streams.
+  No datasets API changes.
+
 ## [0.11.0] - 2026-09-29
 
 ### Changed
