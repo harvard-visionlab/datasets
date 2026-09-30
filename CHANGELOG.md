@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here.
 
+## [0.15.0] - 2026-09-30
+
+### Added
+- `sync --source DIR`: copy caches from a local/NFS copy (e.g. the lab_storage master on FASRC) with
+  parallel ranged `pread`/`pwrite` (`--readers`, default 16) into the staging dir, under the same
+  lock / verify / manifest-last rules. The source copy must pass its own integrity check; otherwise
+  that cache falls back to S3.
+- `status`: in a group-writable cache dir, flags caches with items lacking group write (`group_writable`
+  in `--json`) and prints the owner's `chmod -R g+w` fix.
+
+### Changed
+- `sync --concurrency` defaults to `auto`: 16 parts per file for files >= 256 MB, 1 below (was 1 for all;
+  one 3.8 GB object from S3 went 18 -> 54 MB/s on a Mac, and FASRC saw ~nothing -> 15 MB/s).
+  Pass `--concurrency 1` when writing to NFS that collapses under parallel part writes.
+
+### Fixed
+- Group-writable bases (e.g. setgid 2775 lab dirs): the lock file, the `SYNC_INCOMPLETE.json` marker and s5cmd's
+  output (run with umask 002) are now group-writable too, regardless of the caller's umask 022, so
+  other members can break a stale lock and resume or repair a sync. A cache dir owned by someone else
+  without group write now fails with the owner's `chmod` command instead of a traceback.
+
 ## [0.14.0] - 2026-09-30
 
 ### Added

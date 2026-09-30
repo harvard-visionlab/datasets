@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.5" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.14.0"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.15.0"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.14.0" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.15.0" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.5" }
 ```
 
@@ -63,6 +63,9 @@ uv run visionlab-datasets sync imagenet100 train,val jpeg
 uv run visionlab-datasets sync imagenet1k val all --dry-run
 uv run visionlab-datasets sync imagenet1k train jpeg --deep   # also sha256 what's present, re-fetch mismatches
 uv run visionlab-datasets status --deep --json                # sha256 check of present caches, machine-readable
+# FAS cluster: copy from the lab_storage master instead of S3 (falls back to S3 per cache if the master copy is damaged)
+uv run visionlab-datasets sync imagenet1k train,val jpeg --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
+    --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream
 ```
 
 `sync` (and `load()` when a cache is missing) is safe on a directory shared by several users
@@ -83,8 +86,16 @@ or jobs:
   sha256 doesn't match.
 - **Rebuilt caches.** If the remote `manifest.json` differs from the local one, the cache was
   rebuilt upstream; sync refuses to mix versions unless given `--force`.
-- **Shared permissions.** In a group-writable cache dir, synced files are made group-writable,
-  so any group member can repair them.
+- **Shared permissions.** In a group-writable cache dir, everything sync creates is made
+  group-writable whatever the caller's umask: the lock, the staging dir and its marker, files
+  and dirs. So any group member can repair or re-sync the cache. `status` flags items without
+  group write and prints the `chmod -R g+w` the owner should run. Personal cache dirs follow the umask.
+- **Sources.** From S3, big files download in parallel parts: `--concurrency auto` (the default)
+  uses 16 parts for files of 256 MB and up, 1 for the rest. Use `--concurrency 1` when writing to
+  NFS that collapses under parallel part writes (e.g. /n/lab_storage). `--source DIR` copies from
+  another directory holding the same caches (e.g. the lab_storage master) with `--readers`
+  parallel ranged reads (default 16). It uses the same lock, verify and manifest-last rules, and
+  falls back to S3 for any cache that's missing or damaged there.
 
 Dataset names are the registry names shown by `list`; short aliases `in10`, `in100`,
 `in1k`, `in100_s292` are accepted too. Also available as `python -m visionlab.datasets`.

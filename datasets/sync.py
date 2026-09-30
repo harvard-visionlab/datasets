@@ -20,6 +20,15 @@ One sync of ``<base>/<cache>`` works like this:
 
 On any failure the staging dir stays, with ``SYNC_INCOMPLETE.json`` saying why, and the cache
 is left as it was.
+
+Shared base dirs: when ``<base>`` is group-writable (e.g. a setgid 2775 lab dir), everything sync
+creates (lock, staging, files, dirs) is made group-writable regardless of the caller's umask, so
+any group member can later repair or re-sync the cache. Personal (non-group-writable) bases are
+left to the umask.
+
+Sources: S3 via ``s5cmd run`` (per-file ``--concurrency``: ``auto`` = 16 parts for files
+>= ``AUTO_CONCURRENCY_MIN_MB``, else 1), or a local/NFS copy of the same cache (``source_dir``,
+e.g. the lab_storage master) read with parallel ranged ``pread``/``pwrite`` into the staging dir.
 """
 from __future__ import annotations
 
@@ -45,6 +54,8 @@ LOCK_SUFFIX = ".sync.lock"
 PARTIAL_SUFFIX = ".sync.partial"
 INCOMPLETE_MARKER = "SYNC_INCOMPLETE.json"
 COMMANDS_FILE = ".s5cmd-commands.txt"
+AUTO_CONCURRENCY = 16
+AUTO_CONCURRENCY_MIN_MB = 256
 HEARTBEAT_S = 60
 STALE_S = 15 * 60
 _STAGING_JUNK = {INCOMPLETE_MARKER, COMMANDS_FILE}
@@ -56,6 +67,42 @@ def lock_path(target: Path) -> Path:
 
 def partial_path(target: Path) -> Path:
     return target.parent / f".{target.name}{PARTIAL_SUFFIX}"
+
+
+def shared_base(base: Path) -> bool:
+    """Group-writable base dir: sync makes what it creates group-writable too."""
+    try:
+        return bool(Path(base).stat().st_mode & stat.S_IWGRP)
+    except OSError:
+        return False
+
+
+def _group_write(p: Path) -> None:
+    """chmod g+w (dirs: g+rwxs) on something we own; silently skip what we can't change."""
+    try:
+        st = p.stat()
+        if st.st_uid != os.getuid():
+            return
+        extra = (stat.S_IRGRP | stat.S_IWGRP | stat.S_IXGRP | stat.S_ISGID) if stat.S_ISDIR(st.st_mode) \
+            else (stat.S_IRGRP | stat.S_IWGRP)
+        if st.st_mode & extra != extra:
+            os.chmod(p, stat.S_IMODE(st.st_mode) | extra)
+    except OSError:
+        pass
+
+
+def not_group_writable(path: Path, limit: int = 1000) -> list[Path]:
+    """Items under ``path`` (itself included) lacking group write, up to ``limit``."""
+    out: list[Path] = []
+    for p in [Path(path), *Path(path).rglob("*")]:
+        try:
+            if not p.lstat().st_mode & stat.S_IWGRP:
+                out.append(p)
+        except OSError:
+            continue
+        if len(out) >= limit:
+            break
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -148,6 +195,8 @@ class CacheLock:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o664)
         except FileExistsError:
             return False
+        if shared_base(self.path.parent):
+            os.fchmod(fd, 0o664)  # umask 022 would leave it unbreakable by other group members
         with os.fdopen(fd, "w") as f:
             d = asdict(info)
             d.pop("heartbeat")
@@ -238,32 +287,75 @@ def _tree_bytes(path: Path) -> int:
     return total
 
 
+class _Progress:
+    """Background progress line: bytes from ``done()``, rate, elapsed (every 2 s on a TTY, else 30 s)."""
+
+    def __init__(self, total_bytes: int, done: Callable[[], int]):
+        self.total, self.done, self.t0 = total_bytes, done, time.time()
+        self.stop = threading.Event()
+        self.tty = sys.stdout.isatty()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        last = 0.0
+        while not self.stop.wait(2.0):
+            got, dt = self.done(), time.time() - self.t0
+            if self.tty or dt - last >= 30:
+                last = dt
+                msg = (f"    {got / 1e9:7.2f} / {self.total / 1e9:.2f} GB  "
+                       f"{got / 1e6 / max(dt, 1e-9):7.1f} MB/s  {int(dt)} s")
+                print(("\r" + msg) if self.tty else msg, end="" if self.tty else "\n", flush=True)
+
+    def __enter__(self) -> "_Progress":
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.stop.set()
+        self.thread.join(timeout=5)
+        if self.tty and time.time() - self.t0 > 2:
+            print(flush=True)
+
+
+def _concurrency_for(size: int | None, concurrency: int | str | None) -> int | None:
+    if concurrency == "auto":
+        return AUTO_CONCURRENCY if (size or 0) >= AUTO_CONCURRENCY_MIN_MB * 1_000_000 else 1
+    return None if concurrency is None else int(concurrency)
+
+
 def fetch_files(
     remote: str,
     names: list[str],
     dest: Path,
     *,
     total_bytes: int,
+    sizes: dict[str, int] | None = None,
     endpoint_url: str | None = None,
     numworkers: int = 32,
-    concurrency: int | None = None,
+    concurrency: int | str | None = "auto",
     part_size_mb: int | None = None,
+    umask: int | None = None,
     log: Callable[[str], None] = print,
 ) -> bool:
-    """Download ``remote/<name>`` -> ``dest/<name>`` for each name with one ``s5cmd run``."""
+    """Download ``remote/<name>`` -> ``dest/<name>`` for each name with one ``s5cmd run``.
+
+    ``concurrency``: parts per file (``s5cmd cp --concurrency``); ``"auto"`` picks per file from ``sizes``.
+    ``umask``: for the s5cmd process (0o002 in shared bases, so its files come out group-writable).
+    """
     if not names:
         return True
     base = remote.rstrip("/") + "/"
-    flags: list[str] = []
-    if concurrency is not None:
-        flags += ["--concurrency", str(int(concurrency))]
-    if part_size_mb is not None:
-        flags += ["--part-size", str(int(part_size_mb))]
     lines = []
     for n in names:
         src, dst = base + n, str(dest / n)
         if any(c.isspace() for c in src + dst):
             raise ValueError(f"whitespace in path not supported by s5cmd run: {src!r} -> {dst!r}")
+        flags: list[str] = []
+        c = _concurrency_for((sizes or {}).get(n), concurrency)
+        if c is not None:
+            flags += ["--concurrency", str(c)]
+        if part_size_mb is not None:
+            flags += ["--part-size", str(int(part_size_mb))]
         lines.append(" ".join(["cp", *flags, src, dst]))
     cmd_file = dest / COMMANDS_FILE
     cmd_file.write_text("\n".join(lines) + "\n")
@@ -273,49 +365,118 @@ def fetch_files(
     cmd += ["--numworkers", str(numworkers), "run", str(cmd_file)]
 
     start_bytes = _tree_bytes(dest)
-    t0 = time.time()
-    stop = threading.Event()
-    tty = sys.stdout.isatty()
-
-    def progress() -> None:
-        last = 0.0
-        while not stop.wait(2.0):
-            got = max(0, _tree_bytes(dest) - start_bytes)
-            dt = time.time() - t0
-            if tty or dt - last >= 30:
-                last = dt
-                msg = (f"    {got / 1e9:7.2f} / {total_bytes / 1e9:.2f} GB  "
-                       f"{got / 1e6 / max(dt, 1e-9):7.1f} MB/s  {int(dt)} s")
-                print(("\r" + msg) if tty else msg, end="" if tty else "\n", flush=True)
-
-    mon = threading.Thread(target=progress, daemon=True)
-    mon.start()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     errors: list[str] = []
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            if line.startswith("ERROR"):
-                errors.append(line.rstrip())
-        rc = proc.wait()
-    except BaseException:
-        proc.terminate()
+    with _Progress(total_bytes, lambda: max(0, _tree_bytes(dest) - start_bytes)):
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                umask=-1 if umask is None else umask)
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        raise
-    finally:
-        stop.set()
-        mon.join(timeout=5)
-        if tty:
-            print(flush=True)
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if line.startswith("ERROR"):
+                    errors.append(line.rstrip())
+            rc = proc.wait()
+        except BaseException:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise
     for e in errors[:5]:
         log(f"    {e}")
     if len(errors) > 5:
         log(f"    ... {len(errors) - 5} more s5cmd errors")
     cmd_file.unlink(missing_ok=True)
     return rc == 0 and not errors
+
+
+def list_local_files(src: Path) -> dict[str, int]:
+    """``{relative name: size}`` of a local cache copy (sync's own hidden files excluded)."""
+    src = Path(src)
+    out: dict[str, int] = {}
+    for p in src.rglob("*"):
+        rel = p.relative_to(src)
+        if any(part.startswith(".") for part in rel.parts) or not p.is_file():
+            continue
+        out[rel.as_posix()] = p.stat().st_size
+    return out
+
+
+COPY_SUFFIX = ".copying"
+
+
+def copy_local_files(
+    src: Path,
+    names: list[str],
+    dest: Path,
+    *,
+    total_bytes: int,
+    sizes: dict[str, int],
+    readers: int = 16,
+    chunk_mb: int = 64,
+    log: Callable[[str], None] = print,
+) -> bool:
+    """Copy ``src/<name>`` -> ``dest/<name>`` with ``readers`` parallel ranged pread/pwrite.
+
+    Each file is preallocated as ``<name>.copying`` and renamed when all its chunks are written,
+    so a half-copied file never has its final name (``plan`` would otherwise reuse it by size).
+    """
+    if not names:
+        return True
+    src, dest = Path(src), Path(dest)
+    chunk = chunk_mb << 20
+    jobs: list[tuple[str, int, int]] = []
+    left: dict[str, int] = {}
+    for n in names:
+        size = sizes[n]
+        tmp = dest / (n + COPY_SUFFIX)
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "wb") as f:
+            f.truncate(size)
+        offs = list(range(0, size, chunk)) or [0]
+        left[n] = len(offs)
+        jobs += [(n, o, min(chunk, size - o)) for o in offs]
+    # Interleave files so large files spread across readers from the start.
+    jobs.sort(key=lambda j: (j[1], j[0]))
+    copied = [0]
+    mu = threading.Lock()
+    errors: list[str] = []
+
+    def one(job: tuple[str, int, int]) -> None:
+        n, off, length = job
+        if errors:
+            return
+        try:
+            fin = os.open(src / n, os.O_RDONLY)
+            fout = os.open(dest / (n + COPY_SUFFIX), os.O_WRONLY)
+            try:
+                pos, end = off, off + length
+                while pos < end:
+                    buf = os.pread(fin, min(8 << 20, end - pos), pos)
+                    if not buf:
+                        raise OSError(f"short read at {pos} (source shrank?)")
+                    os.pwrite(fout, buf, pos)
+                    pos += len(buf)
+                    with mu:
+                        copied[0] += len(buf)
+            finally:
+                os.close(fin)
+                os.close(fout)
+            with mu:
+                left[n] -= 1
+                finished = left[n] == 0
+            if finished:
+                os.replace(dest / (n + COPY_SUFFIX), dest / n)
+        except OSError as exc:
+            with mu:
+                errors.append(f"{n} @ {off}: {exc}")
+
+    with _Progress(total_bytes, lambda: copied[0]):
+        with ThreadPoolExecutor(max_workers=max(1, readers)) as pool:
+            list(pool.map(one, jobs))
+    for e in errors[:5]:
+        log(f"    copy error: {e}")
+    return not errors
 
 
 # --------------------------------------------------------------------------- #
@@ -408,28 +569,22 @@ def _size(p: Path) -> int | None:
 
 
 def _shared_perms(base: Path, paths: list[Path]) -> None:
-    """In a group-writable base dir, make synced files group-writable so any member can repair them."""
-    try:
-        if not base.stat().st_mode & stat.S_IWGRP:
-            return
-    except OSError:
-        return
-    for p in paths:
-        try:
-            if p.is_dir():
-                os.chmod(p, 0o2775)
-            elif p.owner() == getpass.getuser():
-                os.chmod(p, 0o664)
-        except (OSError, KeyError):
-            pass
+    """In a group-writable base dir, make what sync wrote group-writable so any member can repair it."""
+    if shared_base(base):
+        for p in paths:
+            _group_write(p)
 
 
 def _mark_incomplete(staging: Path, reason: str, **extra: Any) -> None:
+    marker = staging / INCOMPLETE_MARKER
     try:
-        (staging / INCOMPLETE_MARKER).write_text(json.dumps(
+        tmp = marker.with_name(f".{marker.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(
             {"reason": reason, "time": time.time(), "user": getpass.getuser(), "host": socket.gethostname(), **extra},
             indent=2,
         ))
+        _shared_perms(staging.parent, [tmp])
+        os.replace(tmp, marker)  # works over another member's marker (dir write is enough)
     except OSError:
         pass
 
@@ -460,17 +615,37 @@ def sync_cache(
     break_lock: bool = False,
     endpoint_url: str | None = None,
     numworkers: int = 32,
-    concurrency: int | None = None,
+    concurrency: int | str | None = "auto",
     part_size_mb: int | None = None,
+    source_dir: Path | None = None,
+    readers: int = 16,
     log: Callable[[str], None] = print,
 ) -> SyncResult:
+    """Sync one cache into ``target`` from S3 (``remote``) or, with ``source_dir``, a local copy.
+
+    ``remote_files`` is the source's ``{name: size}`` listing (S3 or ``list_local_files``).
+    """
     from slipstream.cache import OptimizedCache  # type: ignore
 
     target = Path(target)
     res = SyncResult(ok=False, target=str(target))
+    origin = str(source_dir) if source_dir is not None else remote
     if MANIFEST_FILE not in remote_files:
-        res.problems = [f"remote has no {MANIFEST_FILE}: {remote}"]
+        res.problems = [f"source has no {MANIFEST_FILE}: {origin}"]
         return res
+    if source_dir is not None and Path(source_dir).resolve() == target.resolve():
+        res.problems = [f"source and target are the same directory: {target}"]
+        return res
+    umask = 0o002 if shared_base(target.parent) else None
+
+    def fetch(names: list[str], total: int, workers: int) -> bool:
+        if source_dir is not None:
+            return copy_local_files(Path(source_dir), names, staging, total_bytes=total, sizes=remote_files,
+                                    readers=readers, log=log)
+        return fetch_files(remote, names, staging, total_bytes=total, sizes=remote_files,
+                           endpoint_url=endpoint_url, numworkers=workers, concurrency=concurrency,
+                           part_size_mb=part_size_mb, umask=umask, log=log)
+
     try:
         lock = CacheLock(target, break_lock=break_lock, log=log).acquire()
     except LockHeld as exc:
@@ -479,9 +654,19 @@ def sync_cache(
     staging = partial_path(target)
     t0 = time.time()
     try:
+        if target.exists() and not os.access(target, os.W_OK | os.X_OK):
+            try:
+                import pwd
+                owner = pwd.getpwuid(target.stat().st_uid).pw_name
+            except (KeyError, OSError):
+                owner = "its owner"
+            raise _SyncFailed(
+                f"no write permission on {target} (owner {owner}); "
+                f"{owner} must run: chmod -R g+w {target}"
+            )
         staging.mkdir(parents=True, exist_ok=True)
         _shared_perms(target.parent, [staging])
-        _mark_incomplete(staging, "sync in progress", remote=remote)
+        _mark_incomplete(staging, "sync in progress", remote=origin)
         # Staged files of the wrong size are partial downloads (never a good copy): drop them.
         for p in staging.rglob("*"):
             if p.is_file() and p.name not in _STAGING_JUNK:
@@ -490,8 +675,7 @@ def sync_cache(
                     p.unlink()
 
         # 1. remote manifest first: decides whether the local copy is the same cache version.
-        if not fetch_files(remote, [MANIFEST_FILE], staging, total_bytes=remote_files[MANIFEST_FILE],
-                           endpoint_url=endpoint_url, numworkers=1, log=log):
+        if not fetch([MANIFEST_FILE], remote_files[MANIFEST_FILE], 1):
             raise _SyncFailed(f"could not fetch {MANIFEST_FILE}")
         local_manifest = target / MANIFEST_FILE
         if local_manifest.exists() and not force:
@@ -518,10 +702,9 @@ def sync_cache(
         log(f"  fetching {len(todo)} of {len(remote_files) - 1} data files ({need / 1e9:.2f} GB); "
             f"{res.reused_files} already correct")
         t_fetch = time.time()
-        if todo and not fetch_files(remote, todo, staging, total_bytes=need, endpoint_url=endpoint_url,
-                                    numworkers=numworkers, concurrency=concurrency,
-                                    part_size_mb=part_size_mb, log=log):
-            raise _SyncFailed("s5cmd reported errors (see above); staged files kept for the next run")
+        if todo and not fetch(todo, need, numworkers):
+            what = "copy" if source_dir is not None else "s5cmd"
+            raise _SyncFailed(f"{what} reported errors (see above); staged files kept for the next run")
         res.seconds = time.time() - t_fetch
         res.fetched_files, res.fetched_bytes = len(todo), need
 
@@ -537,7 +720,7 @@ def sync_cache(
 
         # 4. commit: data files, then manifest.json last.
         staged = [p for p in staging.rglob("*") if p.is_file() and p.name not in _STAGING_JUNK]
-        _shared_perms(target.parent, staged)
+        _shared_perms(target.parent, staged + [d for d in staging.rglob("*") if d.is_dir()])
         for j in _STAGING_JUNK:
             (staging / j).unlink(missing_ok=True)
         if not target.exists():
@@ -563,11 +746,11 @@ def sync_cache(
         return res
     except _SyncFailed as exc:
         res.problems = [str(exc)]
-        _mark_incomplete(staging, str(exc), remote=remote)
+        _mark_incomplete(staging, str(exc), remote=origin)
         return res
     except BaseException as exc:
         if staging.exists():
-            _mark_incomplete(staging, f"{type(exc).__name__}: {exc}", remote=remote)
+            _mark_incomplete(staging, f"{type(exc).__name__}: {exc}", remote=origin)
         raise
     finally:
         if not res.seconds:

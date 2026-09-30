@@ -196,8 +196,7 @@ class FakeS3:
             raise self.error
         return {n: len(b) for n, b in self.remote(remote).items()}
 
-    def fetch(self, remote, names, dest, *, total_bytes, endpoint_url=None, numworkers=32,
-              concurrency=None, part_size_mb=None, log=print):
+    def fetch(self, remote, names, dest, *, total_bytes, log=print, **kw):
         self.fetched.append((remote, Path(dest), list(names)))
         objs = self.remote(remote)
         for i, n in enumerate(names):
@@ -533,7 +532,7 @@ def test_sync_passes_s5cmd_tuning(env, monkeypatch):
 
     monkeypatch.setattr(cli.cache_sync, "fetch_files", fetch)
     assert cli.main(["sync", "imagenet10", "val", "jpeg", "--part-size", "128", "--numworkers", "8"]) == 0
-    assert seen == {"concurrency": 1, "part_size_mb": 128, "numworkers": 8}
+    assert seen == {"concurrency": "auto", "part_size_mb": 128, "numworkers": 8}
 
 
 def test_status_detects_inflight_download(env, capsys, monkeypatch):
@@ -768,3 +767,128 @@ def test_ensure_cache_raises_on_failure(env):
     env.s3fake.fail_after = 0
     with pytest.raises(RuntimeError, match="s5cmd reported errors"):
         cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, env.root / IN10_VAL, log=lambda m: None)
+
+
+# --------------------------------------------------------------------------- #
+# sync: s5cmd concurrency, local source, shared-dir permissions
+# --------------------------------------------------------------------------- #
+
+
+def test_fetch_files_auto_concurrency_per_file(tmp_path, monkeypatch):
+    import visionlab.datasets.sync as S
+
+    seen = {}
+
+    class FakeProc:
+        stdout: list[str] = []
+
+        def __init__(self, cmd, **kw):
+            seen["cmd"], seen["umask"] = cmd, kw.get("umask")
+            seen["lines"] = Path(cmd[-1]).read_text().splitlines()
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(S.subprocess, "Popen", FakeProc)
+    sizes = {"image.bin": 4_000_000_000, "label.npy": 4096}
+    assert S.fetch_files("s3://b/c/", list(sizes), tmp_path, total_bytes=1, sizes=sizes, umask=0o002)
+    assert seen["lines"] == [
+        f"cp --concurrency 16 s3://b/c/image.bin {tmp_path}/image.bin",
+        f"cp --concurrency 1 s3://b/c/label.npy {tmp_path}/label.npy",
+    ]
+    assert seen["umask"] == 0o002 and seen["cmd"][:3] == ["s5cmd", "--numworkers", "32"]
+    S.fetch_files("s3://b/c/", ["image.bin"], tmp_path, total_bytes=1, sizes=sizes, concurrency=4)
+    assert seen["lines"] == [f"cp --concurrency 4 s3://b/c/image.bin {tmp_path}/image.bin"]
+    assert cli.build_parser().parse_args(["sync", "in10", "val", "jpeg", "--concurrency", "8"]).concurrency == 8
+
+
+def test_copy_local_files_ranged(tmp_path):
+    import os
+
+    import visionlab.datasets.sync as S
+
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    blobs = {"big.bin": os.urandom(3_500_000), "empty.npy": b"", "small.npy": b"abc"}
+    for n, b in blobs.items():
+        (src / n).write_bytes(b)
+    sizes = {n: len(b) for n, b in blobs.items()}
+    assert S.copy_local_files(src, list(blobs), dst, total_bytes=sum(sizes.values()), sizes=sizes,
+                              readers=4, chunk_mb=1)
+    assert {p.name: p.read_bytes() for p in dst.iterdir()} == blobs  # no .copying leftovers
+
+
+def _make_source(root: Path, env) -> Path:
+    src = root / "master" / IN10_VAL
+    src.mkdir(parents=True)
+    for n, b in env.s3fake.remote(IN10_VAL_REMOTE).items():
+        (src / n).write_bytes(b)
+    return src
+
+
+def test_sync_from_local_source(env, capsys, tmp_path_factory):
+    src = _make_source(tmp_path_factory.mktemp("lab"), env)
+    rc = cli.main(["sync", "in10", "val", "jpeg", "--source", str(src.parent)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert f"Syncing {IN10_VAL} <- {src}" in out
+    assert env.downloads == []  # nothing from S3
+    target = env.root / IN10_VAL
+    assert {p.name: p.read_bytes() for p in target.iterdir()} == env.s3fake.remote(IN10_VAL_REMOTE)
+    # repair from the source copies only what's gone
+    (target / "image.bin").unlink()
+    assert cli.main(["sync", "in10", "val", "jpeg", "--source", str(src.parent)]) == 0
+    assert "to copy 1 files" in capsys.readouterr().out
+
+
+def test_sync_source_incomplete_falls_back_to_s3(env, capsys, tmp_path_factory):
+    src = _make_source(tmp_path_factory.mktemp("lab"), env)
+    (src / "image.bin").unlink()  # the master itself is damaged: never copy from it
+    rc = cli.main(["sync", "in10", "val", "jpeg", "--source", str(src.parent)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "missing or incomplete; falling back to S3" in out
+    assert env.downloads  # came from S3
+
+
+def test_shared_base_group_writable_despite_umask(env, capsys):
+    import os
+    import stat
+
+    os.chmod(env.root, 0o775)
+    old = os.umask(0o022)
+    try:
+        target = env.root / IN10_VAL
+        with cli.cache_sync.CacheLock(target):
+            assert cli.cache_sync.lock_path(target).stat().st_mode & stat.S_IWGRP
+        env.s3fake.fail_after = 0  # leave a staging dir + marker behind
+        cli.main(["sync", "in10", "val", "jpeg"])
+        staging = cli.cache_sync.partial_path(target)
+        assert staging.stat().st_mode & stat.S_IWGRP
+        assert (staging / "SYNC_INCOMPLETE.json").stat().st_mode & stat.S_IWGRP
+        env.s3fake.fail_after = None
+        assert cli.main(["sync", "in10", "val", "jpeg"]) == 0
+        assert not cli.cache_sync.not_group_writable(target)
+        capsys.readouterr()
+        # a file someone synced with an old version (umask 022): status says how to fix it
+        os.chmod(target / "label.npy", 0o644)
+        cli.main(["status", "--no-remote", "--json"])
+        row = next(d for d in json.loads(capsys.readouterr().out)["datasets"] if d["cache_name"] == IN10_VAL)
+        assert row["group_writable"] is False
+        assert any("chmod -R g+w" in m for m in row["local_problems"])
+    finally:
+        os.umask(old)
+
+
+def test_personal_base_left_to_umask(env):
+    import os
+    import stat
+
+    os.chmod(env.root, 0o755)
+    old = os.umask(0o022)
+    try:
+        target = _synced(env)
+        assert not (target / "label.npy").stat().st_mode & stat.S_IWGRP
+    finally:
+        os.umask(old)

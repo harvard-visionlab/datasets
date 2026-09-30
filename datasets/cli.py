@@ -250,6 +250,7 @@ class DatasetEntry:
     remote_error: str | None = None
     sync_lock: dict | None = None  # lock file owner/host/pid/started + "stale" reason (None = live)
     sync_partial: dict | None = None  # staging dir of an unfinished sync: path + SYNC_INCOMPLETE reason
+    group_writable: bool | None = None  # shared (group-writable) cache dir only: every item has g+w
     deep_status: str = "unchecked"  # ok | mismatch | unavailable | unchecked (status --deep)
     deep_problems: list[str] = field(default_factory=list)
 
@@ -293,6 +294,19 @@ def check_local(entry: DatasetEntry) -> None:
 def _check_sync_state(entry: DatasetEntry) -> None:
     """Lock / staging dir left by `sync` (possibly another user's, on a shared cache dir)."""
     target = Path(entry.local_path)
+    entry.group_writable = None
+    if target.is_dir() and cache_sync.shared_base(target.parent):
+        bad = cache_sync.not_group_writable(target)
+        entry.group_writable = not bad
+        if bad:
+            try:
+                owner = bad[0].owner()
+            except (KeyError, OSError):
+                owner = "the owner"
+            entry.local_problems.append(
+                f"{len(bad)}{'+' if len(bad) >= 1000 else ''} item(s) not group-writable in a shared cache dir, "
+                f"so other members can't repair it; {owner} should run: chmod -R g+w {target}"
+            )
     lp = cache_sync.lock_path(target)
     entry.sync_lock = entry.sync_partial = None
     if lp.exists():
@@ -756,8 +770,27 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return 0
 
     listings: dict[str, dict[str, int]] = {}
+    sources: dict[str, Path | None] = {}
     total_needed = 0
     for e in todo:
+        src = Path(args.source).expanduser() / e.cache_name if args.source else None
+        if src is not None:
+            from slipstream.cache import OptimizedCache  # type: ignore
+
+            ok_src = (src / cache_sync.MANIFEST_FILE).exists() and OptimizedCache.check_integrity(src)[0]
+            if ok_src and src.resolve() != Path(e.local_path).resolve():
+                files = cache_sync.list_local_files(src)
+                e.remote_status, e.remote_files, e.remote_bytes = "ok", len(files), sum(files.values())
+                listings[e.cache_name], sources[e.cache_name] = files, src
+                target = Path(e.local_path)
+                names, _ = cache_sync.plan(target, cache_sync.partial_path(target), files, force=args.force)
+                need = sum(files[n] for n in names) + files.get(cache_sync.MANIFEST_FILE, 0)
+                total_needed += need
+                _print(f"  {e.cache_name}: {e.local_status}; source {e.remote_files} files, "
+                       f"{fmt_bytes(e.remote_bytes)}; to copy {len(names)} files, {fmt_bytes(need)}  <- {src}")
+                continue
+            why = "same dir as the target" if ok_src else "missing or incomplete"
+            _print(f"  {WARN} {e.cache_name}: source {src} {why}; falling back to S3")
         try:
             files = cache_sync.list_remote_files(
                 e.remote, endpoint_url=args.endpoint_url, profile=os.environ.get("AWS_PROFILE")
@@ -773,7 +806,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             _print(f"  {BAD} {e.cache_name}: remote missing (no files at {e.remote})")
             continue
         e.remote_status, e.remote_files, e.remote_bytes = "ok", len(files), sum(files.values())
-        listings[e.cache_name] = files
+        listings[e.cache_name], sources[e.cache_name] = files, None
         target = Path(e.local_path)
         names, _ = cache_sync.plan(target, cache_sync.partial_path(target), files, force=args.force)
         need = sum(files[n] for n in names) + files.get(cache_sync.MANIFEST_FILE, 0)
@@ -818,7 +851,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     failed = 0
     for e in todo:
         _print()
-        _print(f"Syncing {e.cache_name} <- {e.remote}")
+        _print(f"Syncing {e.cache_name} <- {sources[e.cache_name] or e.remote}")
         res = cache_sync.sync_cache(
             e.remote,
             Path(e.local_path),
@@ -830,6 +863,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
             numworkers=args.numworkers,
             concurrency=args.concurrency,
             part_size_mb=args.part_size,
+            source_dir=sources[e.cache_name],
+            readers=args.readers,
             log=_print,
         )
         if res.ok:
@@ -851,6 +886,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
+
+
+def _concurrency_arg(v: str) -> int | str:
+    if v == "auto":
+        return v
+    try:
+        return int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected an integer or 'auto'") from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -932,10 +976,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true", help="Show what would be downloaded")
     sp.add_argument("--numworkers", type=int, default=32, help="s5cmd parallel workers (default: 32)")
     sp.add_argument(
-        "--concurrency", type=int, default=1,
-        help="s5cmd concurrent parts per file (default: 1 = sequential writes; "
-        "s5cmd's default 5 is very slow on some NFS volumes, e.g. /n/lab_storage)",
+        "--concurrency", type=_concurrency_arg, default="auto",
+        help=f"s5cmd concurrent parts per file: N, or auto (default) = {cache_sync.AUTO_CONCURRENCY} for files "
+        f">= {cache_sync.AUTO_CONCURRENCY_MIN_MB} MB, else 1. Use 1 when writing to NFS that collapses "
+        "under parallel part writes (e.g. /n/lab_storage)",
     )
+    sp.add_argument(
+        "--source", default=None, metavar="DIR",
+        help="Copy from a local/NFS cache dir holding the same caches (e.g. the lab_storage master) instead "
+        "of S3; falls back to S3 per cache when the copy there is missing or incomplete",
+    )
+    sp.add_argument("--readers", type=int, default=16,
+                    help="--source: parallel ranged readers (default: 16)")
     sp.add_argument("--part-size", type=int, default=None, help="s5cmd multipart size in MiB (default: s5cmd's 50)")
     sp.add_argument("--endpoint-url", default=None, help="S3-compatible endpoint URL")
     sp.set_defaults(func=cmd_sync)
