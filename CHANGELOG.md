@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Changed
+- Dev pin and README examples moved to slipstream v0.9.3 (build-only: always relinks the decoder).
+  Consumers of 0.13.1 can already use it by pinning `@v0.9.3`.
+
 ## [0.13.1] - 2026-09-30
 
 ### Fixed
