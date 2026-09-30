@@ -35,8 +35,11 @@ s5cmd rm 's3://visionlab-datasets/slipstream-cache/imagenet1k/imagenet1k-s256_l5
 s5cmd rm 's3://visionlab-datasets/slipstream-cache/imagenet1k/imagenet1k-s256_l512-yuv420-val/slipcache/*'
 ```
 
-lab_storage master, reported by model-rearing as the same layout (~10.3 GB). Check it first with
-datasets >= 0.16.0, whose `unlisted` field lists exactly what isn't part of each cache:
+lab_storage master (~10.3 GB). model-rearing audited all 12 caches under
+`/n/lab_storage/alvarez_lab/Lab/datasets/slipstream` on 2026-09-30 by comparing each directory to its
+manifest's `file_sizes`, manifest.json and `*_index.npy`. Only the same two imagenet1k val caches have
+extras, the `slipcache/` subdir, which matches the S3 audit. To recheck right before deleting
+(datasets >= 0.16.0):
 
 ```bash
 SLIPSTREAM_CACHE_DIR=/n/lab_storage/alvarez_lab/Lab/datasets/slipstream \
