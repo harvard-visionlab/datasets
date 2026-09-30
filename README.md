@@ -18,6 +18,13 @@ uv pip install git+https://github.com/harvard-visionlab/datasets.git
 
 **Note:** This package automatically installs GPU-enabled PyTorch on Linux x86_64 systems (CUDA 12.1) and CPU-only PyTorch on macOS and other platforms.
 
+**Prerequisite: TurboJPEG.** slipstream (>= 0.9.2) builds its C++ decoder at install time and the
+install *fails* if the TurboJPEG API (libturbojpeg + `turbojpeg.h`) is missing. Install it first:
+`brew install jpeg-turbo` (macOS), `apt install libturbojpeg0-dev` (Debian/Ubuntu), or
+`conda install -c conda-forge libjpeg-turbo`. For a non-standard prefix set `TURBOJPEG_ROOT=<prefix>`
+($CONDA_PREFIX and ~/.local are searched automatically). On CLI-only machines that never decode,
+set `SLIPSTREAM_SKIP_EXT=1`. `slipstream status` shows whether the decoder built.
+
 ## Usage
 
 ### Command line

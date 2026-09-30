@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.12.1] - 2026-09-30
+
+### Changed
+- slipstream pinned to 0.9.2. Seeded streams unchanged vs 0.9.0; unseeded random decoders now draw fresh
+  entropy (0.9.1); faster lazy `import slipstream`; `slipstream status` reports the decoder build.
+- **Install requirement:** slipstream's build now fails (previously warned) when the libslipstream
+  decoder can't be built, so TurboJPEG (libturbojpeg + `turbojpeg.h`) must be installed first, or set
+  `TURBOJPEG_ROOT` / `SLIPSTREAM_SKIP_EXT=1`. See README "Installation".
+
 ## [0.12.0] - 2026-09-29
 
 ### Changed
