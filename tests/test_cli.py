@@ -152,6 +152,8 @@ def env(monkeypatch, tmp_path):
     fake = FakeS3()
     monkeypatch.setattr(cli.cache_sync, "list_remote_files", fake.list)
     monkeypatch.setattr(cli.cache_sync, "fetch_files", fake.fetch)
+    monkeypatch.setattr(cli.cache_sync, "read_remote_manifest",
+                        lambda remote, **kw: json.loads(fake.remote(remote)[MANIFEST]))
     plumbing.s3fake = fake
     plumbing.downloads = fake.fetched
     plumbing.root = tmp_path
@@ -170,7 +172,9 @@ def fake_integrity(path):
 
 
 def fake_manifest(files: dict[str, bytes], **extra) -> bytes:
-    return json.dumps({"num_samples": 99, "_files": {n: len(b) for n, b in files.items()}, **extra}).encode()
+    sizes = {n: len(b) for n, b in files.items()}
+    return json.dumps({"num_samples": 99, "fields": {"label": {"type": "int"}}, "_files": sizes,
+                       "file_sizes": sizes, **extra}).encode()
 
 
 class FakeS3:
@@ -900,3 +904,47 @@ def test_deep_check_never_ok_without_hashes(env, monkeypatch):
     target = _synced(env)
     monkeypatch.setattr(OptimizedCache, "check_integrity", staticmethod(lambda p, deep=False: (True, [])))
     assert cli.cache_sync.deep_check(target)[0] == "unavailable"
+
+
+def test_sync_ignores_files_not_in_manifest_but_keeps_indexes(env, capsys):
+    objs = env.s3fake.remote(IN10_VAL_REMOTE)
+    data = {n: b for n, b in objs.items() if n != MANIFEST}
+    objs[MANIFEST] = json.dumps({"num_samples": 99, "fields": {"label": {"type": "int"}},
+                                 "file_sizes": {n: len(b) for n, b in data.items()}}).encode()
+    objs["label_index.npy"] = b"idx"  # write_index output: not in the manifest, used by the loader
+    objs["slipcache/image.bin"] = b"d" * 3000  # leftover duplicate
+    objs["slipcache/manifest.json"] = b"{}"
+    rc = cli.main(["sync", "in10", "val", "jpeg"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "remote has files not in its manifest, ignored (2 file(s), 0.00 GB: slipcache/)" in out
+    target = env.root / IN10_VAL
+    assert (target / "label_index.npy").exists() and not (target / "slipcache").exists()
+    fetched = [n for _, _, names in env.downloads for n in names]
+    assert not any(n.startswith("slipcache/") for n in fetched)
+
+
+def test_status_flags_unlisted_extras(env, capsys):
+    target = _synced(env)
+    (target / "slipcache").mkdir()
+    (target / "slipcache" / "image.bin").write_bytes(b"d" * 2000)
+    (target / "label_index.npy").write_bytes(b"idx")  # index: not an extra
+    capsys.readouterr()
+    assert cli.main(["status", "--no-remote", "--json"]) == 0  # informational, not a hard problem
+    row = next(d for d in json.loads(capsys.readouterr().out)["datasets"] if d["cache_name"] == IN10_VAL)
+    assert row["unlisted"] == {"count": 1, "bytes": 2000, "names": ["slipcache/image.bin"]}
+    assert any("safe to delete" in m for m in row["local_problems"])
+
+
+def test_split_listing_keeps_everything_for_manifest_without_file_info():
+    files = {"manifest.json": 10, "x.bin": 5}
+    assert cli.cache_sync.split_listing(files, {"num_samples": 1}) == (files, {})
+
+
+def test_split_listing_keeps_video_store_sidecars():
+    man = {"fields": {"video": {"type": "bytes"}}, "file_sizes": {"video.bin": 9, "video.meta.npy": 1}}
+    files = {"manifest.json": 1, "video.bin": 9, "video.meta.npy": 1, "records.parquet": 5,
+             "store_manifest.json": 2, ".synced": 1, "slipcache/video.bin": 9}
+    kept, extras = cli.cache_sync.split_listing(files, man)
+    assert set(kept) == {"manifest.json", "video.bin", "video.meta.npy", "records.parquet", "store_manifest.json"}
+    assert set(extras) == {".synced", "slipcache/video.bin"}

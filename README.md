@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.5" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.15.0"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.16.0"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.15.0" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.16.0" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.5" }
 ```
 
@@ -84,6 +84,10 @@ or jobs:
 - **Repair.** Only missing or wrong-size files are fetched, so a partly purged cache (e.g. on
   netscratch) re-downloads just what's gone. `--deep` also re-fetches right-size files whose
   sha256 doesn't match.
+- **Only the cache's own files.** Sync copies manifest.json, the files it names, the
+  `<field>_index.npy` indexes, and datasets' video-store sidecars (`records.parquet`,
+  `store_manifest.json`). Anything else in the source, e.g. a leftover `slipcache/` copy, is
+  skipped, and `status` flags such extras in local caches.
 - **Rebuilt caches.** If the remote `manifest.json` differs from the local one, the cache was
   rebuilt upstream; sync refuses to mix versions unless given `--force`.
 - **Shared permissions.** In a group-writable cache dir, everything sync creates is made

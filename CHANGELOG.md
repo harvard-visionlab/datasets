@@ -2,7 +2,19 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [0.16.0] - 2026-09-30
+
+### Changed
+- **sync copies only the cache's own files**: manifest.json, the files it names (`file_sizes` and each
+  field's storage files), `<field>_index.npy` (slipstream `write_index` output, auto-discovered by the
+  loader but not in the manifest), and datasets' video-store sidecars (`records.parquet`,
+  `store_manifest.json`). Other files in the source are skipped and reported, e.g. the duplicate
+  `slipcache/` copy inside the imagenet1k val caches (7.6 GB -> 3.8 GB for jpeg-val). A manifest
+  with neither `fields` nor `file_sizes` keeps everything.
+
+### Added
+- `status`: flags files in a local cache that aren't part of it (`unlisted` in `--json`; informational).
+- docs/plans/imagenet1k-val-slipcache-cleanup.md: S3 audit results + proposed deletion (not run).
 
 ### Fixed
 - `status --deep` reports `unavailable` whenever the manifest has no `file_sha256`, even if slipstream's

@@ -250,6 +250,7 @@ class DatasetEntry:
     remote_error: str | None = None
     sync_lock: dict | None = None  # lock file owner/host/pid/started + "stale" reason (None = live)
     sync_partial: dict | None = None  # staging dir of an unfinished sync: path + SYNC_INCOMPLETE reason
+    unlisted: dict | None = None  # files in the cache dir that its manifest doesn't name: count/bytes/names
     group_writable: bool | None = None  # shared (group-writable) cache dir only: every item has g+w
     deep_status: str = "unchecked"  # ok | mismatch | unavailable | unchecked (status --deep)
     deep_problems: list[str] = field(default_factory=list)
@@ -368,9 +369,18 @@ def _check_local_files(entry: DatasetEntry) -> None:
                 )
     try:
         with open(manifest) as f:
-            entry.num_samples = int(json.load(f).get("num_samples"))
+            mdata = json.load(f)
+        entry.num_samples = int(mdata.get("num_samples"))
     except Exception:
-        entry.num_samples = None
+        mdata, entry.num_samples = {}, None
+    local = cache_sync.list_local_files(path) if os.access(path, os.R_OK | os.X_OK) else {}
+    _, extras = cache_sync.split_listing(local, mdata or {})
+    if extras:
+        entry.unlisted = {"count": len(extras), "bytes": sum(extras.values()), "names": sorted(extras)[:50]}
+        entry.local_problems.append(
+            f"not in the manifest, unused by slipstream ({cache_sync.describe_extras(extras)}); "
+            "sync ignores them, safe to delete"
+        )
     if (
         entry.expected_samples is not None
         and entry.num_samples is not None
@@ -780,6 +790,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
             ok_src = (src / cache_sync.MANIFEST_FILE).exists() and OptimizedCache.check_integrity(src)[0]
             if ok_src and src.resolve() != Path(e.local_path).resolve():
                 files = cache_sync.list_local_files(src)
+                files, extras = cache_sync.split_listing(
+                    files, json.loads((src / cache_sync.MANIFEST_FILE).read_text())
+                )
+                if extras:
+                    _print(f"  {WARN} {e.cache_name}: source has files not in its manifest, ignored "
+                           f"({cache_sync.describe_extras(extras)})")
                 e.remote_status, e.remote_files, e.remote_bytes = "ok", len(files), sum(files.values())
                 listings[e.cache_name], sources[e.cache_name] = files, src
                 target = Path(e.local_path)
@@ -805,6 +821,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
             e.remote_status = "missing"
             _print(f"  {BAD} {e.cache_name}: remote missing (no files at {e.remote})")
             continue
+        if cache_sync.MANIFEST_FILE in files:
+            try:
+                rman = cache_sync.read_remote_manifest(
+                    e.remote, endpoint_url=args.endpoint_url, profile=os.environ.get("AWS_PROFILE")
+                )
+                files, extras = cache_sync.split_listing(files, rman)
+                if extras:
+                    _print(f"  {WARN} {e.cache_name}: remote has files not in its manifest, ignored "
+                           f"({cache_sync.describe_extras(extras)})")
+            except Exception as exc:  # sync_cache filters again after fetching the manifest
+                _print(f"  {WARN} {e.cache_name}: could not read remote manifest up front ({exc})")
         e.remote_status, e.remote_files, e.remote_bytes = "ok", len(files), sum(files.values())
         listings[e.cache_name], sources[e.cache_name] = files, None
         target = Path(e.local_path)

@@ -252,6 +252,65 @@ class CacheLock:
 
 
 # --------------------------------------------------------------------------- #
+# which files belong to a cache
+# --------------------------------------------------------------------------- #
+
+
+# visionlab-datasets' own per-store files next to slipstream's (video stores, prep/spatialvid_hq/merge.py):
+# records.parquet (record_idx <-> clip_id; read by VideoDataset) and store_manifest.json (encode settings).
+DATASETS_SIDECARS = frozenset({"records.parquet", "store_manifest.json"})
+
+
+def cache_file_names(manifest: dict) -> set[str] | None:
+    """Files a cache consists of, per its manifest; None if the manifest doesn't say (very old).
+
+    = manifest.json + ``file_sizes`` keys + each field's storage files + ``<field>_index.npy``
+    (slipstream's ``write_index`` output: not in the manifest, but auto-discovered by the loader)
+    + ``DATASETS_SIDECARS``.
+    """
+    fields = manifest.get("fields") or {}
+    sizes = manifest.get("file_sizes") or {}
+    if not fields and not sizes:
+        return None
+    try:
+        from slipstream.cache import _get_expected_files  # type: ignore
+    except ImportError:  # pragma: no cover
+        _get_expected_files = None
+    names = {MANIFEST_FILE, *sizes, *DATASETS_SIDECARS}
+    for f, meta in fields.items():
+        if _get_expected_files is not None:
+            names.update(_get_expected_files(f, (meta or {}).get("type", "")))
+        names.add(f"{f}_index.npy")
+    return names
+
+
+def split_listing(files: dict[str, int], manifest: dict) -> tuple[dict[str, int], dict[str, int]]:
+    """``(cache files, unlisted extras)`` of a ``{name: size}`` listing. Keeps everything if the
+    manifest can't tell (so an old cache is never truncated)."""
+    names = cache_file_names(manifest)
+    if names is None:
+        return dict(files), {}
+    kept = {n: s for n, s in files.items() if n in names}
+    return kept, {n: s for n, s in files.items() if n not in names}
+
+
+def read_remote_manifest(remote: str, *, endpoint_url: str | None = None, profile: str | None = None) -> dict:
+    import boto3  # type: ignore
+
+    rest = remote[len("s3://"):] if remote.startswith("s3://") else remote
+    bucket, _, prefix = rest.partition("/")
+    s3 = boto3.Session(profile_name=profile).client("s3", endpoint_url=endpoint_url)
+    body = s3.get_object(Bucket=bucket, Key=prefix.rstrip("/") + "/" + MANIFEST_FILE)["Body"].read()
+    return json.loads(body)
+
+
+def describe_extras(extras: dict[str, int], limit: int = 3) -> str:
+    tops = sorted({n.split("/", 1)[0] + ("/" if "/" in n else "") for n in extras})
+    shown = ", ".join(tops[:limit]) + (", ..." if len(tops) > limit else "")
+    return f"{len(extras)} file(s), {sum(extras.values()) / 1e9:.2f} GB: {shown}"
+
+
+# --------------------------------------------------------------------------- #
 # remote listing + fetch (patched in tests)
 # --------------------------------------------------------------------------- #
 
@@ -677,6 +736,13 @@ def sync_cache(
         # 1. remote manifest first: decides whether the local copy is the same cache version.
         if not fetch([MANIFEST_FILE], remote_files[MANIFEST_FILE], 1):
             raise _SyncFailed(f"could not fetch {MANIFEST_FILE}")
+        try:
+            staged_manifest = json.loads((staging / MANIFEST_FILE).read_text())
+        except ValueError as exc:
+            raise _SyncFailed(f"source {MANIFEST_FILE} is not valid JSON: {exc}") from None
+        remote_files, extras = split_listing(remote_files, staged_manifest)
+        if extras:
+            log(f"  ignoring files not in the manifest ({describe_extras(extras)})")
         local_manifest = target / MANIFEST_FILE
         if local_manifest.exists() and not force:
             if local_manifest.read_bytes() != (staging / MANIFEST_FILE).read_bytes():
