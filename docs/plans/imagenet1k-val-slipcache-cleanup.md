@@ -1,6 +1,8 @@
 # Proposal: delete the duplicate `slipcache/` copies in the imagenet1k val caches
 
-Status: **proposal, nothing deleted.** Needs George's decision. Written 2026-09-30.
+Status: **done 2026-09-30.** George approved. lab_storage copies removed by model-rearing, S3 copies
+(16 objects, 10.33 GB) removed by the datasets session after the pre-checks below. Each remaining cache
+holds exactly its 8 own files. The S3 re-audit shows no extras. Kept for the record.
 
 ## Finding
 
@@ -26,7 +28,7 @@ Nothing reads `slipcache/`. slipstream (0.9.5) loads `<dir>/manifest.json` direc
 function looks inside the subdir. visionlab-datasets >= 0.16.0 doesn't copy it (sync copies only
 files the manifest accounts for) and `status` flags it wherever it exists.
 
-## Proposed cleanup (not run)
+## Cleanup (run 2026-09-30)
 
 S3, 10.3 GB:
 

@@ -9,7 +9,7 @@ isn't on PyPI. **Pin slipstream yourself in the same install** (any tag in range
 it fails to resolve.
 
 ```bash
-pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.5" \
+pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.6" \
             "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.16.1"
 ```
 
@@ -20,7 +20,7 @@ dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
 visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.16.1" }
-visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.5" }
+visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.6" }
 ```
 
 uv applies a git dependency's own `[tool.uv.sources]`, so datasets' torch/torchvision sources (the

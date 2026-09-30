@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Changed
+- Dev pin and README examples moved to slipstream v0.9.6 (wheels tagged per interpreter, shipping only that
+  interpreter's decoder build; fixes uv reusing a cpython-312 build in a 3.10 venv). In range; consumers can pin it.
+- docs/plans/imagenet1k-val-slipcache-cleanup.md: marked done (lab_storage + S3 duplicates deleted, 10.3 GB each).
+
 ## [0.16.1] - 2026-09-30
 
 ### Changed
