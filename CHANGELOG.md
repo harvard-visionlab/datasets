@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [0.10.0] - 2026-09-29
+
+### Added
+- Video registry: `load('spatialvid-hq')` -> `VideoDataset` (stores per format/resolution/fps, split and
+  subset parquets, `fps="native"`, population subset applied by default, batched `poses_at` /
+  `ego_motion_at`, `cache_path` so `SlipstreamLoader(ds, ...)` works directly, `ego_motion_transform()`).
+- SpatialVID-HQ prep: fps as a store axis, fleet encode (`fleet.py`), `--retry-failed` patch pass,
+  carrier review / `make_subset`, three-way `make_splits`; per-store RGB normalisation stats; dataset card.
+- `cli list` shows video stores / splits / subsets.
+
+### Changed
+- slipstream pinned to 0.7.1 (0.7.0: `DecodeVideoWindow`, `sample_data`, array fields; 0.7.1: RandomRotate
+  under bf16, `DecodeMultiResizeCropEmbed` with yuv420, `set_epoch` resets the embed decoder's crop counter).
+  Seeded streams unchanged vs 0.7.0.
+
+### Fixed
+- `relative_motion` / `quat_to_rotmat` compute in float64 (float32 arccos error ~1e-3 rad on small rotations).
+
 ## [0.9.0] - 2026-09-12
 
 ### Added
