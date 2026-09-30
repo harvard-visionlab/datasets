@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.11.0] - 2026-09-29
+
+### Changed
+- **Breaking (reproducibility): slipstream pinned to 0.8.0**, which derives every seeded stream via a
+  hashed `SeedSequence`. Sample orders, crops and other seeded augmentations differ from slipstream
+  0.7.x for the same seed. Projects that must reproduce 0.7.x streams should stay on datasets 0.10.0
+  (slipstream 0.7.1). No datasets API changes; 0.7.1's fixes are included.
+
 ## [0.10.0] - 2026-09-29
 
 ### Added
