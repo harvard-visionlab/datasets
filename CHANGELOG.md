@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Fixed
+- `status --deep` reports `unavailable` whenever the manifest has no `file_sha256`, even if slipstream's
+  `check_integrity(deep=True)` exists (a size-only pass must not read as a passed sha256 check).
+  The hash format (`file_sha256` next to `file_sizes`) is slipstream's proposal, pending George's decision.
+
 ## [0.15.0] - 2026-09-30
 
 ### Added

@@ -526,6 +526,9 @@ def deep_check(cache_dir: Path) -> tuple[str, list[str]]:
     from slipstream.cache import OptimizedCache  # type: ignore
 
     cache_dir = Path(cache_dir)
+    hashes = manifest_hashes(cache_dir / MANIFEST_FILE)
+    if not hashes:  # checked first: a size-only pass must never report "ok" for a sha256 check
+        return "unavailable", [f"manifest has no {HASHES_KEY} (built by a slipstream without per-file hashes)"]
     try:
         has_deep = "deep" in inspect.signature(OptimizedCache.check_integrity).parameters
     except (TypeError, ValueError):
@@ -533,9 +536,6 @@ def deep_check(cache_dir: Path) -> tuple[str, list[str]]:
     if has_deep:
         ok, probs = OptimizedCache.check_integrity(cache_dir, deep=True)
         return ("ok" if ok else "mismatch"), list(probs)
-    hashes = manifest_hashes(cache_dir / MANIFEST_FILE)
-    if not hashes:
-        return "unavailable", [f"manifest has no {HASHES_KEY} (built by a slipstream without per-file hashes)"]
     probs = list(_hash_mismatches(cache_dir, hashes).values())
     return ("mismatch" if probs else "ok"), probs
 

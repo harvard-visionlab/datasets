@@ -892,3 +892,11 @@ def test_personal_base_left_to_umask(env):
         assert not (target / "label.npy").stat().st_mode & stat.S_IWGRP
     finally:
         os.umask(old)
+
+
+def test_deep_check_never_ok_without_hashes(env, monkeypatch):
+    from slipstream.cache import OptimizedCache
+
+    target = _synced(env)
+    monkeypatch.setattr(OptimizedCache, "check_integrity", staticmethod(lambda p, deep=False: (True, [])))
+    assert cli.cache_sync.deep_check(target)[0] == "unavailable"
