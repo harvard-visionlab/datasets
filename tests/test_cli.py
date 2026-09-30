@@ -948,3 +948,31 @@ def test_split_listing_keeps_video_store_sidecars():
     kept, extras = cli.cache_sync.split_listing(files, man)
     assert set(kept) == {"manifest.json", "video.bin", "video.meta.npy", "records.parquet", "store_manifest.json"}
     assert set(extras) == {".synced", "slipcache/video.bin"}
+
+
+def test_same_cache_version_ignores_added_hashes():
+    base = {"num_samples": 5, "file_sizes": {"a.bin": 1}}
+    same = cli.cache_sync.same_cache_version
+    assert same(base, {**base, "file_sha256": {"a.bin": "00"}})
+    assert same({**base, "file_sha256": {"a.bin": "00"}}, {**base, "file_sha256": {"a.bin": "00"}})
+    assert not same({**base, "file_sha256": {"a.bin": "00"}}, {**base, "file_sha256": {"a.bin": "11"}})
+    assert not same(base, {**base, "num_samples": 6})
+
+
+def test_sync_keeps_locally_added_hashes_and_uses_them(env, capsys):
+    import hashlib
+
+    target = _synced(env)  # remote manifest has no hashes
+    m = json.loads((target / MANIFEST).read_text())
+    m["file_sha256"] = {n: hashlib.sha256((target / n).read_bytes()).hexdigest()
+                        for n in m["file_sizes"]}  # what `slipstream hash` does
+    (target / MANIFEST).write_text(json.dumps(m))
+    (target / "image.bin").write_bytes(b"Q" * 3000)  # same size, wrong content
+    capsys.readouterr()
+    rc = cli.main(["sync", "in10", "val", "jpeg", "--deep"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "differs from the local one" not in out
+    assert "sha256 mismatch in cache: image.bin (will re-fetch)" in out
+    assert (target / "image.bin").read_bytes() == b"i" * 3000
+    assert json.loads((target / MANIFEST).read_text())["file_sha256"] == m["file_sha256"]  # kept

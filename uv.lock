@@ -3601,7 +3601,7 @@ requires-dist = [
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=2.1.0", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torchvision", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'", specifier = ">=0.16.0", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.16.0", index = "https://download.pytorch.org/whl/cu126" },
-    { name = "visionlab-slipstream", specifier = ">=0.9,<0.10" },
+    { name = "visionlab-slipstream", specifier = ">=0.9,<0.11" },
 ]
 
 [package.metadata.requires-dev]
@@ -3616,7 +3616,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "seaborn" },
-    { name = "visionlab-slipstream", git = "https://github.com/harvard-visionlab/slipstream.git?rev=v0.9.6" },
+    { name = "visionlab-slipstream", git = "https://github.com/harvard-visionlab/slipstream.git?rev=d184180" },
 ]
 video = [
     { name = "av" },
@@ -3630,8 +3630,8 @@ video = [
 
 [[package]]
 name = "visionlab-slipstream"
-version = "0.9.6"
-source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=v0.9.6#5c08322278979da89b157dcd5cf86e8ab73c0a3a" }
+version = "0.10.0"
+source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=d184180#d1841800d560dd1d831120ecf54c49f1becbdc34" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },

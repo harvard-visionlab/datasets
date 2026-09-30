@@ -5,6 +5,13 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Changed
+- slipstream range widened to `>=0.9,<0.11` for slipstream 0.10.0 (manifests carry `file_sha256`;
+  `check_integrity(deep=True)`; `slipstream hash`). Dev pin: slipstream 0.10.0.
+
+### Fixed
+- sync no longer treats a locally hashed copy (`slipstream hash`) as a different cache build: manifests are
+  compared without `file_sha256` (hashes must agree only when both sides have them). When the source has no
+  hashes, the local ones verify fetched files and `--deep` repairs, and the local manifest is kept.
 - Dev pin and README examples moved to slipstream v0.9.6 (wheels tagged per interpreter, shipping only that
   interpreter's decoder build; fixes uv reusing a cpython-312 build in a 3.10 venv). In range; consumers can pin it.
 - docs/plans/imagenet1k-val-slipcache-cleanup.md: marked done (lab_storage + S3 duplicates deleted, 10.3 GB each).

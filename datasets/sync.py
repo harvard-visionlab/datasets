@@ -284,6 +284,16 @@ def cache_file_names(manifest: dict) -> set[str] | None:
     return names
 
 
+def same_cache_version(a: dict, b: dict) -> bool:
+    """Two manifests describe the same cache build: equal apart from ``file_sha256``, which a copy
+    gains later (``slipstream hash``). If both carry hashes, those must agree too."""
+    ha, hb = a.get(HASHES_KEY), b.get(HASHES_KEY)
+    if ha and hb and ha != hb:
+        return False
+    strip = lambda m: {k: v for k, v in m.items() if k != HASHES_KEY}  # noqa: E731
+    return strip(a) == strip(b)
+
+
 def split_listing(files: dict[str, int], manifest: dict) -> tuple[dict[str, int], dict[str, int]]:
     """``(cache files, unlisted extras)`` of a ``{name: size}`` listing. Keeps everything if the
     manifest can't tell (so an old cache is never truncated)."""
@@ -744,16 +754,25 @@ def sync_cache(
         remote_files, extras = split_listing(remote_files, staged_manifest)
         if extras:
             log(f"  ignoring files not in the manifest ({describe_extras(extras)})")
-        local_manifest = target / MANIFEST_FILE
-        if local_manifest.exists() and not force:
-            if local_manifest.read_bytes() != (staging / MANIFEST_FILE).read_bytes():
+        local_m: dict | None = None
+        if (target / MANIFEST_FILE).exists() and not force:
+            try:
+                local_m = json.loads((target / MANIFEST_FILE).read_text())
+            except (OSError, ValueError):
+                local_m = None  # unreadable local manifest: the source's replaces it
+            if local_m is not None and not same_cache_version(local_m, staged_manifest):
                 raise _SyncFailed(
-                    f"remote {MANIFEST_FILE} differs from the local one (cache rebuilt upstream?); "
+                    f"source {MANIFEST_FILE} differs from the local one (cache rebuilt upstream?); "
                     "refusing to mix versions. Re-run with --force to replace the local copy."
                 )
+        # A local copy hashed after sync (`slipstream hash`) keeps its hashes when the source has none:
+        # they verify what we fetch, and its manifest stays instead of the hashless one.
+        hashes = staged_manifest.get(HASHES_KEY) or {}
+        keep_local_manifest = bool(local_m and local_m.get(HASHES_KEY) and not hashes)
+        if keep_local_manifest:
+            hashes = local_m[HASHES_KEY]
 
         # 2. fetch what's missing or wrong (--deep: also what's the right size but wrong content).
-        hashes = manifest_hashes(staging / MANIFEST_FILE)
         bad_in_cache: set[str] = set()
         if deep and target.exists() and not force:
             if hashes:
@@ -763,7 +782,7 @@ def sync_cache(
                 for n in sorted(bad_in_cache):
                     log(f"    ✗ sha256 mismatch in cache: {n} (will re-fetch)")
             else:
-                log(f"  ⚠ --deep: remote manifest has no {HASHES_KEY}; checking sizes only")
+                log(f"  ⚠ --deep: no {HASHES_KEY} in the source or local manifest; checking sizes only")
         todo, res.reused_files = plan(target, staging, remote_files, force=force, bad_in_cache=bad_in_cache)
         need = sum(remote_files[n] for n in todo)
         log(f"  fetching {len(todo)} of {len(remote_files) - 1} data files ({need / 1e9:.2f} GB); "
@@ -786,6 +805,8 @@ def sync_cache(
             raise _SyncFailed("staged files failed verification: " + "; ".join(list(bad.values())[:5]))
 
         # 4. commit: data files, then manifest.json last.
+        if keep_local_manifest:
+            (staging / MANIFEST_FILE).unlink()
         staged = [p for p in staging.rglob("*") if p.is_file() and p.name not in _STAGING_JUNK]
         _shared_perms(target.parent, staged + [d for d in staging.rglob("*") if d.is_dir()])
         for j in _STAGING_JUNK:
@@ -805,7 +826,7 @@ def sync_cache(
         # 5. the cache's own check (sizes from its manifest) on the result.
         ok, probs = OptimizedCache.check_integrity(target)
         missing = [f"missing or wrong size after sync: {n}" for n, s in remote_files.items()
-                   if _size(target / n) != s]
+                   if _size(target / n) != s and not (keep_local_manifest and n == MANIFEST_FILE)]
         if not ok or missing:
             res.problems = list(probs) + missing
             return res
