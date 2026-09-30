@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [0.17.1] - 2026-09-30
+
+### Changed
+- slipstream range widened to `>=0.9,<0.12` for slipstream 0.11.0 (progressive-resolution training; no
+  manifest, cache or CLI changes). Dev pin and README examples: slipstream v0.11.0.
+
+### Added
+- `visionlab.datasets.prep.hash_masters`: coordinated `file_sha256` pass for the master caches. `hash-s3`
+  streams sha256 from S3; `hash-local` hashes a local master read-only; `compare` cross-checks two sources;
+  `publish-s3` backs up and replaces the S3 manifest; `apply-local` writes the published manifest into a
+  local master. Manifests are serialised byte-identically to `slipstream hash`.
+
 ## [0.17.0] - 2026-09-30
 
 ### Changed
