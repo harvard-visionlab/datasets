@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.13.1] - 2026-09-30
+
+### Fixed
+- uv consumers can now pick any in-range slipstream tag. 0.13.0 pinned slipstream v0.9.2 in
+  `[tool.uv.sources]`, which uv applies to git dependents, so a consumer pinning another tag failed
+  with "conflicting URLs". datasets' own pin moved to the `dev` dependency group (lock unchanged: v0.9.2).
+- README: uv install example uses `[tool.uv.sources]` and notes consumers must declare the torch indexes.
+
 ## [0.13.0] - 2026-09-30
 
 ### Changed

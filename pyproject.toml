@@ -15,7 +15,7 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     # Slipstream data loader. Range, not a tag: consumers pin slipstream themselves (it's not on PyPI),
     # e.g. "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.2".
-    # Dev env pins the tag via [tool.uv.sources]. 0.9: (seed, rank, epoch)-keyed seeded streams.
+    # Dev env pins the tag in the dev group. 0.9: (seed, rank, epoch)-keyed seeded streams.
     "visionlab-slipstream>=0.9,<0.10",
 
     # Torch stack (for preprocessing transforms)
@@ -42,6 +42,9 @@ video = [
     "scipy",
 ]
 dev = [
+    # datasets' own env pins slipstream here, not in [tool.uv.sources]: uv applies a git dep's sources
+    # to consumers, which would force this tag on them.
+    "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.2",
     "pytest",
     "pytest-xdist",
     "ruff",
@@ -55,7 +58,6 @@ dev = [
 ]
 
 [tool.uv.sources]
-visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.2" }
 torch = [
     { index = "pytorch-cu126", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
     { index = "pytorch-cpu", marker = "sys_platform != 'linux' or platform_machine != 'x86_64'" },

@@ -10,17 +10,22 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.2" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.13.0"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.13.1"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 
 ```toml
-dependencies = [
-    "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.13.0",
-    "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.2",
-]
+dependencies = ["visionlab-datasets", "visionlab-slipstream"]
+
+[tool.uv.sources]
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.13.1" }
+visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.2" }
 ```
+
+uv applies a git dependency's own `[tool.uv.sources]`, so datasets' torch/torchvision sources (the
+`pytorch-cu126` / `pytorch-cpu` indexes) reach your lock: declare those indexes and torch sources in
+your project too (copy them from this repo's `pyproject.toml`), or `uv lock` fails on conflicting indexes.
 
 A slipstream tag outside the range (e.g. v0.8.0) fails resolution. The range only moves in a datasets
 minor release, because each slipstream minor so far has changed seeded streams.
