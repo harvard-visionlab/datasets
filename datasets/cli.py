@@ -9,6 +9,7 @@
     visionlab-datasets path imagenet100 val    # print local cache path(s) for a dataset
     visionlab-datasets sync imagenet100 train,val jpeg    # download caches
     visionlab-datasets sync imagenet1k val all            # both formats
+    visionlab-datasets status --deep --json               # sha256 check, machine-readable
 
 Also runnable as ``python -m visionlab.datasets``.
 
@@ -20,9 +21,9 @@ Division of labour: **visionlab-datasets** owns the lab dataset registry
 (names, splits, formats, remote S3 caches, per-platform cache dir) and hence
 this CLI. **slipstream** is the registry-agnostic plumbing; we only use its
 generic building blocks (``slipstream.cli.inspect_dir/check_s3/remote_listing/
-find_other_caches``, ``slipstream.cache.OptimizedCache.check_integrity``,
-``slipstream.s3_sync.download_s3_cache``). ``slipstream status`` remains as a
-bare plumbing check that knows nothing about lab datasets.
+find_other_caches``, ``slipstream.cache.OptimizedCache.check_integrity``).
+Sync itself (lock, stage, verify, rename; safe on shared dirs) is ``visionlab.datasets.sync``.
+``slipstream status`` remains as a bare plumbing check that knows nothing about lab datasets.
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import sync as cache_sync
 from .registry import get_config, list_datasets
 from .runtime_platform import CACHE_DIR_ENV_VAR, detect_platform, get_platform_cache_dir
 from .version import __version__
@@ -238,7 +240,7 @@ class DatasetEntry:
     remote: str
     local_path: str
     expected_samples: int | None = None  # registry metadata num_{split}
-    local_status: str = "missing"  # ok | incomplete | downloading | empty | missing | unreadable
+    local_status: str = "missing"  # ok | incomplete | downloading | syncing | empty | missing | unreadable
     local_problems: list[str] = field(default_factory=list)
     local_bytes: int | None = None
     num_samples: int | None = None
@@ -246,6 +248,10 @@ class DatasetEntry:
     remote_files: int | None = None
     remote_bytes: int | None = None
     remote_error: str | None = None
+    sync_lock: dict | None = None  # lock file owner/host/pid/started + "stale" reason (None = live)
+    sync_partial: dict | None = None  # staging dir of an unfinished sync: path + SYNC_INCOMPLETE reason
+    deep_status: str = "unchecked"  # ok | mismatch | unavailable | unchecked (status --deep)
+    deep_problems: list[str] = field(default_factory=list)
 
 
 def cache_name_for(remote: str) -> str:
@@ -280,6 +286,42 @@ def datasets_without_caches() -> list[str]:
 
 
 def check_local(entry: DatasetEntry) -> None:
+    _check_local_files(entry)
+    _check_sync_state(entry)
+
+
+def _check_sync_state(entry: DatasetEntry) -> None:
+    """Lock / staging dir left by `sync` (possibly another user's, on a shared cache dir)."""
+    target = Path(entry.local_path)
+    lp = cache_sync.lock_path(target)
+    entry.sync_lock = entry.sync_partial = None
+    if lp.exists():
+        info = cache_sync.read_lock(target)
+        stale = cache_sync.lock_stale_reason(info, lp)
+        entry.sync_lock = {**(asdict(info) if info else {"unreadable": True}), "path": str(lp), "stale": stale}
+        who = info.describe() if info else "unknown owner"
+        if stale is None:
+            if entry.local_status != "ok":
+                entry.local_status = "syncing"
+                entry.local_problems = []
+            entry.local_problems.insert(0, f"sync in progress: {who}")
+        else:
+            entry.local_problems.insert(0, f"stale sync lock ({stale}): {who}; next sync breaks it")
+    pp = cache_sync.partial_path(target)
+    if pp.is_dir():
+        reason = None
+        try:
+            reason = json.loads((pp / cache_sync.INCOMPLETE_MARKER).read_text()).get("reason")
+        except (OSError, ValueError):
+            pass
+        entry.sync_partial = {"path": str(pp), "reason": reason, "bytes": _dir_bytes(pp)}
+        if entry.sync_lock is None or entry.sync_lock["stale"] is not None:
+            entry.local_problems.insert(
+                0, f"unfinished sync staged in {pp.name} ({reason or 'no reason recorded'}); re-run sync to resume"
+            )
+
+
+def _check_local_files(entry: DatasetEntry) -> None:
     from slipstream.cache import MANIFEST_FILE, OptimizedCache  # type: ignore
 
     path = Path(entry.local_path)
@@ -362,7 +404,7 @@ def _remote_base(entries: list[DatasetEntry]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def collect_status(*, check_remote_access: bool = True, endpoint_url: str | None = None) -> dict:
+def collect_status(*, check_remote_access: bool = True, endpoint_url: str | None = None, deep: bool = False) -> dict:
     scli = _slipstream_cli()
     import slipstream  # type: ignore
 
@@ -374,6 +416,8 @@ def collect_status(*, check_remote_access: bool = True, endpoint_url: str | None
 
     for e in entries:
         check_local(e)
+        if deep and e.local_status == "ok":
+            e.deep_status, e.deep_problems = cache_sync.deep_check(Path(e.local_path))
     if check_remote_access and s3.credentials_found and entries:
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(
@@ -383,7 +427,8 @@ def collect_status(*, check_remote_access: bool = True, endpoint_url: str | None
                 )
             )
 
-    others = scli.find_other_caches(cache_base, {e.cache_name for e in entries})
+    others = [(n, b) for n, b in scli.find_other_caches(cache_base, {e.cache_name for e in entries})
+              if not n.endswith(cache_sync.PARTIAL_SUFFIX)]  # sync staging dirs are reported per cache
     return {
         "visionlab_datasets_version": __version__,
         "slipstream_version": getattr(slipstream, "__version__", "?"),
@@ -434,6 +479,9 @@ def problems(status: dict) -> list[str]:
     unreadable = [e for e in status["datasets"] if e["local_status"] == "unreadable"]
     for e in unreadable[:3]:
         out.append(f"Cache {e['cache_name']} present but not readable: {'; '.join(e['local_problems'])}")
+    for e in [e for e in status["datasets"] if e.get("deep_status") == "mismatch"]:
+        out.append(f"Cache {e['cache_name']} failed the sha256 check: {'; '.join(e['deep_problems'][:3])}"
+                   f"  (fix: visionlab-datasets sync {e['dataset']} {e['split']} {e['fmt']} --deep)")
     return out
 
 
@@ -517,6 +565,8 @@ def print_status(status: dict, *, paths: bool = False) -> None:
                 local = f"{WARN} incomplete"
             elif ls == "downloading":
                 local = f"{WARN} downloading"
+            elif ls == "syncing":
+                local = f"{WARN} syncing"
             elif ls == "unreadable":
                 local = f"{BAD} unreadable"
             elif ls == "empty":
@@ -541,6 +591,14 @@ def print_status(status: dict, *, paths: bool = False) -> None:
         p(f"  local root: {c['path']}")
         for e in [e for e in entries if e["local_problems"]]:
             p(f"  {WARN} {e['cache_name']}: {'; '.join(e['local_problems'][:3])}")
+        checked = [e for e in entries if e.get("deep_status", "unchecked") != "unchecked"]
+        if checked:
+            n = {k: sum(e["deep_status"] == k for e in checked) for k in ("ok", "mismatch", "unavailable")}
+            p(f"  deep check (sha256): {n['ok']} ok, {n['mismatch']} mismatch, "
+              f"{n['unavailable']} without hashes in the manifest")
+            for e in checked:
+                if e["deep_status"] == "mismatch":
+                    p(f"  {BAD} {e['cache_name']}: {'; '.join(e['deep_problems'][:3])}")
         errs = [e for e in entries if e["remote_status"] in ("denied", "error")]
         if errs:
             p(f"  {WARN} remote error example ({errs[0]['cache_name']}): {errs[0]['remote_error']}")
@@ -588,7 +646,7 @@ def print_status(status: dict, *, paths: bool = False) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    status = collect_status(check_remote_access=not args.no_remote, endpoint_url=args.endpoint_url)
+    status = collect_status(check_remote_access=not args.no_remote, endpoint_url=args.endpoint_url, deep=args.deep)
     if args.json:
         print(json.dumps(status, indent=2, default=str))
     else:
@@ -671,34 +729,8 @@ def cmd_path(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _download_kwargs(download_fn, concurrency: int | None, part_size: int | None) -> dict:
-    """s5cmd per-file tuning, passed only if the installed slipstream accepts it (>= 0.5.0).
-
-    Default concurrency=1 (sequential writes per file): NFS volumes such as
-    /n/lab_storage collapse to a few MB/s under s5cmd's default 5 concurrent
-    50 MB part writes, while sequential writes run near line rate. Files are
-    still downloaded in parallel across ``--numworkers``.
-    """
-    import inspect
-
-    try:
-        params = inspect.signature(download_fn).parameters
-    except (TypeError, ValueError):  # pragma: no cover
-        params = {}
-    wanted = {"concurrency": concurrency, "part_size_mb": part_size}
-    out = {k: v for k, v in wanted.items() if v is not None and k in params}
-    dropped = [k for k, v in wanted.items() if v is not None and k not in params]
-    if dropped:
-        _print(
-            f"  {WARN} installed slipstream ignores {', '.join(dropped)} "
-            "(upgrade visionlab-slipstream >= 0.5.0 for per-file s5cmd tuning)"
-        )
-    return out
-
-
 def cmd_sync(args: argparse.Namespace) -> int:
     _slipstream_cli()  # fail early with the upgrade hint if slipstream is too old
-    from slipstream.s3_sync import download_s3_cache  # type: ignore
 
     name = resolve_name(args.dataset)
     splits = parse_list(args.splits, SPLITS, list(SPLITS))
@@ -713,38 +745,55 @@ def cmd_sync(args: argparse.Namespace) -> int:
     todo: list[DatasetEntry] = []
     for e in entries:
         check_local(e)
-        if e.local_status == "ok" and not args.force:
+        if e.local_status == "ok" and not (args.force or args.deep):
             _print(
                 f"  {OK} {e.cache_name}: already present ({fmt_bytes(e.local_bytes)}), "
-                "skipping (use --force to re-download)"
+                "skipping (--deep to verify sha256 and repair, --force to re-download)"
             )
         else:
             todo.append(e)
     if not todo:
         return 0
 
+    listings: dict[str, dict[str, int]] = {}
     total_needed = 0
     for e in todo:
-        check_remote(e, endpoint_url=args.endpoint_url, profile=os.environ.get("AWS_PROFILE"))
+        try:
+            files = cache_sync.list_remote_files(
+                e.remote, endpoint_url=args.endpoint_url, profile=os.environ.get("AWS_PROFILE")
+            )
+        except Exception as exc:
+            msg = str(exc)
+            e.remote_status = "denied" if "AccessDenied" in msg or "Forbidden" in msg else "error"
+            e.remote_error = f"{type(exc).__name__}: {msg}"
+            _print(f"  {BAD} {e.cache_name}: remote {e.remote_status} ({e.remote_error})")
+            continue
+        if not files:
+            e.remote_status = "missing"
+            _print(f"  {BAD} {e.cache_name}: remote missing (no files at {e.remote})")
+            continue
+        e.remote_status, e.remote_files, e.remote_bytes = "ok", len(files), sum(files.values())
+        listings[e.cache_name] = files
+        target = Path(e.local_path)
+        names, _ = cache_sync.plan(target, cache_sync.partial_path(target), files, force=args.force)
+        need = sum(files[n] for n in names) + files.get(cache_sync.MANIFEST_FILE, 0)
+        total_needed += need
         state = {
+            "ok": "present (--deep: sha256 check + repair)" if args.deep else "present (--force: re-download)",
             "missing": "not present locally",
             "empty": "dir exists but no manifest (culled?)",
-            "downloading": "download already in progress elsewhere",
+            "downloading": "old-style download in progress in the cache dir",
+            "syncing": "sync in progress (another process holds the lock)",
             "incomplete": "incomplete locally",
             "unreadable": "unreadable locally",
         }.get(e.local_status, "re-download")
-        if e.remote_status == "ok":
-            _print(
-                f"  {e.cache_name}: {state}; remote {e.remote_files} files, "
-                f"{fmt_bytes(e.remote_bytes)}  <- {e.remote}"
-            )
-            total_needed += e.remote_bytes or 0
-        else:
-            _print(
-                f"  {BAD} {e.cache_name}: remote {e.remote_status} "
-                f"({e.remote_error or 'no files at ' + e.remote})"
-            )
-    todo = [e for e in todo if e.remote_status == "ok"]
+        _print(
+            f"  {e.cache_name}: {state}; remote {e.remote_files} files, {fmt_bytes(e.remote_bytes)}; "
+            f"to fetch {len(names)} files, {fmt_bytes(need)}  <- {e.remote}"
+        )
+        for msg in e.local_problems[:3]:
+            _print(f"    {WARN} {msg}")
+    todo = [e for e in todo if e.cache_name in listings]
     if not todo:
         return 1
 
@@ -766,30 +815,36 @@ def cmd_sync(args: argparse.Namespace) -> int:
         _print("[dry-run] nothing downloaded")
         return 0
 
-    dl_kwargs = _download_kwargs(download_s3_cache, args.concurrency, args.part_size)
     failed = 0
     for e in todo:
         _print()
-        ok = download_s3_cache(
+        _print(f"Syncing {e.cache_name} <- {e.remote}")
+        res = cache_sync.sync_cache(
             e.remote,
             Path(e.local_path),
+            remote_files=listings[e.cache_name],
+            force=args.force,
+            deep=args.deep,
+            break_lock=args.break_lock,
             endpoint_url=args.endpoint_url,
             numworkers=args.numworkers,
-            verbose=True,
-            **dl_kwargs,
+            concurrency=args.concurrency,
+            part_size_mb=args.part_size,
+            log=_print,
         )
-        if ok:
-            check_local(e)
-            ok = e.local_status == "ok"
-            if not ok:
-                _print(
-                    f"  {BAD} {e.cache_name}: downloaded but integrity check failed: "
-                    f"{'; '.join(e.local_problems[:3])}"
-                )
-        if ok:
-            _print(f"  {OK} {e.cache_name} -> {e.local_path}")
+        if res.ok:
+            rate = f", {res.mb_per_s:.1f} MB/s" if res.fetched_bytes else ""
+            _print(
+                f"  {OK} {e.cache_name} -> {e.local_path}  (fetched {res.fetched_files} files, "
+                f"{fmt_bytes(res.fetched_bytes)} in {res.seconds:.0f} s{rate}; {res.reused_files} already correct)"
+            )
         else:
             failed += 1
+            for msg in res.problems[:5]:
+                _print(f"  {BAD} {e.cache_name}: {msg}")
+            pp = cache_sync.partial_path(Path(e.local_path))
+            if pp.exists():
+                _print(f"  staged files kept in {pp} (re-run sync to resume)")
     return 1 if failed else 0
 
 
@@ -831,6 +886,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-remote", action="store_true", help="Skip network checks (S3 identity/listing)")
     sp.add_argument("--endpoint-url", default=None, help="S3-compatible endpoint URL")
     sp.add_argument("--json", action="store_true", help="Machine-readable output")
+    sp.add_argument(
+        "--deep", action="store_true",
+        help="Also sha256 every file of each present cache against its manifest (slow; needs hashes in the manifest)",
+    )
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("list", aliases=["datasets"], help="List registered datasets and S3 caches")
@@ -862,6 +921,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("fmt", help="jpeg | yuv420 | jpeg,yuv420 | all")
     sp.add_argument("--dest", default=None, help="Override cache dir (default: resolved cache dir)")
     sp.add_argument("--force", action="store_true", help="Re-download even if present and intact")
+    sp.add_argument(
+        "--deep", action="store_true",
+        help="Also sha256 the files already present and re-fetch mismatches (needs hashes in the manifest)",
+    )
+    sp.add_argument(
+        "--break-lock", action="store_true",
+        help="Take over another sync's lock even if it looks live (stale locks are broken automatically)",
+    )
     sp.add_argument("--dry-run", action="store_true", help="Show what would be downloaded")
     sp.add_argument("--numworkers", type=int, default=32, help="s5cmd parallel workers (default: 32)")
     sp.add_argument(

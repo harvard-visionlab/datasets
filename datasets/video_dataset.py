@@ -121,12 +121,12 @@ def resolve_store(remote: str, tree: str, cache_base: Path, download: bool = Tru
             return q
     if not download:
         return None
-    from slipstream.s3_sync import download_s3_cache, s3_path_exists
+    from slipstream.s3_sync import s3_path_exists
+    from .sync import ensure_cache
     if not s3_path_exists(remote.rstrip("/") + "/" + MANIFEST_FILE):
         return None
     print(f"Downloading video store {name} from S3 ...")
-    if not download_s3_cache(remote, p):
-        raise RuntimeError(f"Failed to download {remote}")
+    ensure_cache(remote, p)            # lock/stage/verify, like `visionlab-datasets sync`
     return p
 
 

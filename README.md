@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.9.5" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.13.1"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.14.0"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.13.1" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.14.0" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.9.5" }
 ```
 
@@ -61,7 +61,30 @@ comma lists or `all`:
 ```bash
 uv run visionlab-datasets sync imagenet100 train,val jpeg
 uv run visionlab-datasets sync imagenet1k val all --dry-run
+uv run visionlab-datasets sync imagenet1k train jpeg --deep   # also sha256 what's present, re-fetch mismatches
+uv run visionlab-datasets status --deep --json                # sha256 check of present caches, machine-readable
 ```
+
+`sync` (and `load()` when a cache is missing) is safe on a directory shared by several users
+or jobs:
+
+- **Lock.** Each cache has a lock file `.<cache>.sync.lock` next to it, recording owner, host,
+  pid and start time, with a heartbeat every 60 s. A second sync of the same cache exits 1 and
+  changes nothing, while `load()` waits for the other sync and uses its result. A lock is stale
+  if its process is gone (same host) or its heartbeat is over 15 min old; the next sync breaks
+  it automatically. `--break-lock` forces a takeover.
+- **Stage, verify, commit.** Files download into `.<cache>.sync.partial/` on the same filesystem.
+  Each is checked for size, and for sha256 if the manifest has `file_sha256`. Then they're renamed
+  into the cache, `manifest.json` last. Nothing already in the cache is deleted.
+- **Failure.** The staging dir is kept, with the reason in `SYNC_INCOMPLETE.json`, and the next
+  sync resumes from it. `status` shows it.
+- **Repair.** Only missing or wrong-size files are fetched, so a partly purged cache (e.g. on
+  netscratch) re-downloads just what's gone. `--deep` also re-fetches right-size files whose
+  sha256 doesn't match.
+- **Rebuilt caches.** If the remote `manifest.json` differs from the local one, the cache was
+  rebuilt upstream; sync refuses to mix versions unless given `--force`.
+- **Shared permissions.** In a group-writable cache dir, synced files are made group-writable,
+  so any group member can repair them.
 
 Dataset names are the registry names shown by `list`; short aliases `in10`, `in100`,
 `in1k`, `in100_s292` are accepted too. Also available as `python -m visionlab.datasets`.
@@ -76,8 +99,10 @@ Adding a dataset means adding a config under `datasets/_configs/`; it then appea
 Cache directory resolution: `SLIPSTREAM_CACHE_DIR` if set, else a per-platform default
 (`/n/lab_storage/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster, `~/.slipstream`
 on workstations/devboxes/devcontainers, `/tmp/slipstream_cache` on Lightning Studio).
-Do not point the cache at netscratch: it culls unused files monthly, leaving empty cache
-dirs behind (`status` reports these as `empty dir`).
+netscratch purges files that haven't been used for ~90 days, which leaves caches without
+`manifest.json` (`status` reports these as `empty dir`) or missing data files (`incomplete`).
+If you serve caches from netscratch, run `sync` before training (it re-fetches only what was
+purged), and `status --deep` to check contents.
 
 ### Python
 

@@ -132,17 +132,11 @@ def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
     # Download from S3 if not present locally
     manifest = local_cache_dir / MANIFEST_FILE
     if not manifest.exists():
-        from slipstream.s3_sync import download_s3_cache
+        # Same lock/stage/verify path as `visionlab-datasets sync`: safe on a shared cache dir,
+        # and re-fetches only what a scratch purge removed.
+        from .sync import ensure_cache
         print(f"Downloading {name} ({split}, {fmt}) from S3...")
-        success = download_s3_cache(
-            remote_cache_path,
-            local_cache_dir,
-        )
-        if not success:
-            raise RuntimeError(
-                f"Failed to download cache from {remote_cache_path}. "
-                f"Check your S3 credentials and network connection."
-            )
+        ensure_cache(remote_cache_path, local_cache_dir)
 
     dataset = SlipstreamDataset(local_dir=str(local_cache_dir), **kwargs)
 

@@ -148,20 +148,66 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("SLIPSTREAM_CACHE_DIR", str(tmp_path))
     plumbing = FakePlumbing()
     monkeypatch.setattr(cli, "_slipstream_cli", lambda: plumbing)
-    monkeypatch.setattr(OptimizedCache, "check_integrity", staticmethod(lambda p: (True, [])))
-    downloads: list[tuple[str, Path]] = []
-
-    def fake_download(remote, local, endpoint_url=None, numworkers=32, verbose=True):
-        downloads.append((remote, Path(local)))
-        make_cache(Path(local).parent, Path(local).name, num_samples=99)
-        return True
-
-    import slipstream.s3_sync
-
-    monkeypatch.setattr(slipstream.s3_sync, "download_s3_cache", fake_download)
-    plumbing.downloads = downloads
+    monkeypatch.setattr(OptimizedCache, "check_integrity", staticmethod(fake_integrity))
+    fake = FakeS3()
+    monkeypatch.setattr(cli.cache_sync, "list_remote_files", fake.list)
+    monkeypatch.setattr(cli.cache_sync, "fetch_files", fake.fetch)
+    plumbing.s3fake = fake
+    plumbing.downloads = fake.fetched
     plumbing.root = tmp_path
     return plumbing
+
+
+def fake_integrity(path):
+    """Like slipstream's size check, for fake manifests that list ``_files`` {name: size}."""
+    try:
+        files = json.loads((Path(path) / MANIFEST).read_text()).get("_files", {})
+    except (OSError, ValueError):
+        return False, ["manifest.json missing"]
+    probs = [f"missing: {n}" for n, sz in files.items()
+             if not (Path(path) / n).exists() or (Path(path) / n).stat().st_size != sz]
+    return not probs, probs
+
+
+def fake_manifest(files: dict[str, bytes], **extra) -> bytes:
+    return json.dumps({"num_samples": 99, "_files": {n: len(b) for n, b in files.items()}, **extra}).encode()
+
+
+class FakeS3:
+    """Remote caches as {remote: {name: bytes}}; unknown remotes get a small default cache."""
+
+    def __init__(self):
+        self.objects: dict[str, dict[str, bytes]] = {}
+        self.error: Exception | None = None
+        self.corrupt: set[str] = set()  # names fetched with right size, wrong content
+        self.fail_after: int | None = None  # fetch this many files, then report failure
+        self.fetched: list[tuple[str, Path, list[str]]] = []  # (remote, dest, names)
+        self.listed: list[str] = []
+
+    def remote(self, remote: str) -> dict[str, bytes]:
+        if remote not in self.objects:
+            data = {"image.bin": b"i" * 3000, "image.meta.npy": b"m" * 100, "label.npy": b"l" * 50}
+            self.objects[remote] = {MANIFEST: fake_manifest(data), **data}
+        return self.objects[remote]
+
+    def list(self, remote, *, endpoint_url=None, profile=None):
+        self.listed.append(remote)
+        if self.error is not None:
+            raise self.error
+        return {n: len(b) for n, b in self.remote(remote).items()}
+
+    def fetch(self, remote, names, dest, *, total_bytes, endpoint_url=None, numworkers=32,
+              concurrency=None, part_size_mb=None, log=print):
+        self.fetched.append((remote, Path(dest), list(names)))
+        objs = self.remote(remote)
+        for i, n in enumerate(names):
+            if self.fail_after is not None and n != MANIFEST and i >= self.fail_after:
+                return False
+            data = objs[n]
+            if n in self.corrupt:
+                data = b"X" * len(data)
+            (Path(dest) / n).write_bytes(data)
+        return True
 
 
 # --------------------------------------------------------------------------- #
@@ -285,7 +331,7 @@ def test_sync_dry_run_expands_splits_and_fmts(env, capsys):
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "✓ imagenet100-s256_l512-jpeg-val: already present" in out
-    assert sorted(env.listed) == [
+    assert sorted(env.s3fake.listed) == [
         "s3://visionlab-datasets/slipstream-cache/imagenet100/imagenet100-s256_l512-jpeg-train/",
         "s3://visionlab-datasets/slipstream-cache/imagenet100/imagenet100-s256_l512-yuv420-train/",
         "s3://visionlab-datasets/slipstream-cache/imagenet100/imagenet100-s256_l512-yuv420-val/",
@@ -294,17 +340,24 @@ def test_sync_dry_run_expands_splits_and_fmts(env, capsys):
     assert env.downloads == []
 
 
+IN10_VAL = "imagenet10-s256_l512-jpeg-val"
+IN10_VAL_REMOTE = f"s3://visionlab-datasets/slipstream-cache/imagenet10/{IN10_VAL}/"
+
+
 def test_sync_downloads_and_verifies(env, capsys):
     rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert env.downloads == [
-        (
-            "s3://visionlab-datasets/slipstream-cache/imagenet10/imagenet10-s256_l512-jpeg-val/",
-            env.root / "imagenet10-s256_l512-jpeg-val",
-        )
+    target = env.root / IN10_VAL
+    staging = env.root / f".{IN10_VAL}.sync.partial"
+    # manifest first (own fetch), then the data files, all into the staging dir
+    assert [(r, d, n) for r, d, n in env.downloads] == [
+        (IN10_VAL_REMOTE, staging, [MANIFEST]),
+        (IN10_VAL_REMOTE, staging, ["image.bin", "image.meta.npy", "label.npy"]),
     ]
-    assert f"✓ imagenet10-s256_l512-jpeg-val -> {env.root / 'imagenet10-s256_l512-jpeg-val'}" in out
+    assert f"✓ {IN10_VAL} -> {target}" in out
+    assert sorted(p.name for p in target.iterdir()) == ["image.bin", "image.meta.npy", "label.npy", MANIFEST]
+    assert not staging.exists() and not (env.root / f".{IN10_VAL}.sync.lock").exists()
 
 
 def test_sync_requires_splits_and_fmt(env, capsys):
@@ -318,7 +371,7 @@ def test_sync_requires_splits_and_fmt(env, capsys):
 
 def test_sync_accepts_alias(env):
     cli.main(["sync", "in10", "val", "jpeg"])
-    assert [p.name for _, p in env.downloads] == ["imagenet10-s256_l512-jpeg-val"]
+    assert {d.name for _, d, _ in env.downloads} == {".imagenet10-s256_l512-jpeg-val.sync.partial"}
 
 
 def test_sync_skips_unregistered_combo_with_warning(env, capsys):
@@ -343,7 +396,7 @@ def test_sync_skips_unregistered_combo_with_warning(env, capsys):
 
 
 def test_sync_remote_denied(env, capsys):
-    env.remote_error = Exception("AccessDenied: nope")
+    env.s3fake.error = Exception("AccessDenied: nope")
     rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
     out = capsys.readouterr().out
     assert rc == 1
@@ -469,29 +522,18 @@ def test_fas_cluster_default_is_persistent_storage():
     assert "netscratch" not in PLATFORM_CACHE_DIRS[Platform.FAS_CLUSTER]
 
 
-def test_sync_passes_concurrency_when_supported(env, monkeypatch, capsys):
-    import slipstream.s3_sync
-
+def test_sync_passes_s5cmd_tuning(env, monkeypatch):
     seen = {}
+    real = env.s3fake.fetch
 
-    def fake_download(remote, local, endpoint_url=None, numworkers=32, verbose=True,
-                      concurrency=None, part_size_mb=None):
-        seen.update(concurrency=concurrency, part_size_mb=part_size_mb, numworkers=numworkers)
-        make_cache(Path(local).parent, Path(local).name, num_samples=99)
-        return True
+    def fetch(remote, names, dest, **kw):
+        if names != [MANIFEST]:
+            seen.update({k: kw[k] for k in ("concurrency", "part_size_mb", "numworkers")})
+        return real(remote, names, dest, **kw)
 
-    monkeypatch.setattr(slipstream.s3_sync, "download_s3_cache", fake_download)
+    monkeypatch.setattr(cli.cache_sync, "fetch_files", fetch)
     assert cli.main(["sync", "imagenet10", "val", "jpeg", "--part-size", "128", "--numworkers", "8"]) == 0
     assert seen == {"concurrency": 1, "part_size_mb": 128, "numworkers": 8}
-    assert "ignores" not in capsys.readouterr().out
-
-
-def test_sync_drops_concurrency_on_old_slipstream(env, capsys):
-    # fixture's fake_download has the 0.4.5 signature (no concurrency kwarg)
-    assert cli.main(["sync", "imagenet10", "val", "jpeg", "--concurrency", "1"]) == 0
-    out = capsys.readouterr().out
-    assert "installed slipstream ignores concurrency" in out
-    assert env.downloads and env.downloads[0][1].name == "imagenet10-s256_l512-jpeg-val"
 
 
 def test_status_detects_inflight_download(env, capsys, monkeypatch):
@@ -505,3 +547,224 @@ def test_status_detects_inflight_download(env, capsys, monkeypatch):
     assert "imagenet100       train  yuv420  ⚠ downloading" in out
     assert "download in progress: image.bin (2.0 KB so far)" in out
     assert "missing: image.bin" not in out
+
+
+# --------------------------------------------------------------------------- #
+# sync: shared-dir safety (lock, staging, verify, repair)
+# --------------------------------------------------------------------------- #
+
+
+def _synced(env) -> Path:
+    assert cli.main(["sync", "imagenet10", "val", "jpeg"]) == 0
+    env.downloads.clear()
+    return env.root / IN10_VAL
+
+
+def test_sync_repairs_only_missing_files(env, capsys):
+    target = _synced(env)
+    (target / "image.bin").unlink()  # scratch purge: a data file and the manifest gone
+    (target / MANIFEST).unlink()
+    (target / "label.npy").write_bytes(b"short")  # truncated
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert [n for _, _, n in env.downloads] == [[MANIFEST], ["image.bin", "label.npy"]]
+    assert "fetching 2 of 3 data files" in out and "1 already correct" in out
+    assert (target / "label.npy").read_bytes() == b"l" * 50
+    assert (target / MANIFEST).exists()
+
+
+def test_sync_present_cache_skipped_unless_deep_or_force(env, capsys):
+    _synced(env)
+    assert cli.main(["sync", "imagenet10", "val", "jpeg"]) == 0
+    assert "already present" in capsys.readouterr().out
+    assert env.downloads == []
+
+
+def test_sync_refuses_while_another_sync_holds_the_lock(env, capsys):
+    import os
+    import socket
+
+    lock = env.root / f".{IN10_VAL}.sync.lock"
+    lock.write_text(json.dumps({"user": "someone", "host": socket.gethostname(), "pid": os.getpid(),
+                                "started": 0, "token": "t"}))
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "another sync holds" in out and "someone@" in out
+    assert env.downloads == [] and not (env.root / IN10_VAL).exists()
+    assert lock.exists()  # not ours: left alone
+
+
+def test_sync_breaks_stale_lock(env, capsys):
+    import socket
+
+    lock = env.root / f".{IN10_VAL}.sync.lock"
+    lock.write_text(json.dumps({"user": "ghost", "host": socket.gethostname(), "pid": 2**22 + 12345,
+                                "started": 0, "token": "t"}))
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "broke stale sync lock" in out and "is gone" in out
+    assert not lock.exists()
+
+
+def test_stale_lock_by_heartbeat_age(tmp_path):
+    import os
+    import time
+
+    target = tmp_path / "c"
+    lp = cli.cache_sync.lock_path(target)
+    lp.write_text(json.dumps({"user": "u", "host": "other-host", "pid": 1, "started": 0, "token": "t"}))
+    info = cli.cache_sync.read_lock(target)
+    assert cli.cache_sync.lock_stale_reason(info, lp) is None  # other host, fresh heartbeat: live
+    old = time.time() - cli.cache_sync.STALE_S - 5
+    os.utime(lp, (old, old))
+    info = cli.cache_sync.read_lock(target)
+    assert "no heartbeat" in cli.cache_sync.lock_stale_reason(info, lp)
+
+
+def test_sync_failure_keeps_good_copy_and_staging(env, capsys):
+    target = _synced(env)
+    (target / "image.bin").unlink()
+    (target / "label.npy").unlink()
+    env.s3fake.fail_after = 1  # fetches image.bin, then "fails"
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    staging = env.root / f".{IN10_VAL}.sync.partial"
+    assert "staged files kept" in out
+    marker = json.loads((staging / "SYNC_INCOMPLETE.json").read_text())
+    assert "s5cmd reported errors" in marker["reason"]
+    assert (target / "image.meta.npy").exists() and (target / MANIFEST).exists()  # untouched
+    assert not (target / "image.bin").exists()  # nothing half-committed
+    # status reports the unfinished sync; the rerun resumes from staging
+    cli.main(["status", "--no-remote"])
+    assert "unfinished sync staged in" in capsys.readouterr().out
+    env.s3fake.fail_after = None
+    env.downloads.clear()
+    assert cli.main(["sync", "imagenet10", "val", "jpeg"]) == 0
+    assert [n for _, _, n in env.downloads] == [[MANIFEST], ["label.npy"]]  # image.bin reused
+    assert (target / "image.bin").exists() and not staging.exists()
+
+
+def test_sync_refuses_to_mix_cache_versions(env, capsys):
+    target = _synced(env)
+    (target / "label.npy").unlink()
+    objs = env.s3fake.objects[IN10_VAL_REMOTE]
+    objs[MANIFEST] = fake_manifest({n: b for n, b in objs.items() if n != MANIFEST}, rebuilt=True)
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
+    assert rc == 1
+    assert "differs from the local one" in capsys.readouterr().out
+    assert "rebuilt" not in json.loads((target / MANIFEST).read_text())
+
+
+def _hashed_remote(env) -> dict[str, bytes]:
+    import hashlib
+
+    objs = env.s3fake.remote(IN10_VAL_REMOTE)
+    hashes = {n: hashlib.sha256(b).hexdigest() for n, b in objs.items() if n != MANIFEST}
+    objs[MANIFEST] = fake_manifest({n: b for n, b in objs.items() if n != MANIFEST}, file_sha256=hashes)
+    return objs
+
+
+def test_sync_rejects_corrupt_download_by_sha256(env, capsys):
+    _hashed_remote(env)
+    env.s3fake.corrupt = {"image.bin"}
+    rc = cli.main(["sync", "imagenet10", "val", "jpeg"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "sha256 mismatch: image.bin" in out
+    staging = env.root / f".{IN10_VAL}.sync.partial"
+    assert not (staging / "image.bin").exists() and (staging / "label.npy").exists()
+    assert not (env.root / IN10_VAL).exists()
+
+
+def test_status_deep_and_sync_deep_repair(env, capsys):
+    _hashed_remote(env)
+    target = _synced(env)
+    capsys.readouterr()
+    assert cli.main(["status", "--no-remote", "--deep", "--json"]) == 0
+    row = next(d for d in json.loads(capsys.readouterr().out)["datasets"] if d["cache_name"] == IN10_VAL)
+    assert row["deep_status"] == "ok"
+
+    (target / "image.bin").write_bytes(b"Z" * 3000)  # same size, bad content: sizes can't see it
+    assert cli.main(["status", "--no-remote", "--deep"]) == 1
+    out = capsys.readouterr().out
+    assert "1 mismatch" in out and "sha256 mismatch: image.bin" in out
+
+    assert cli.main(["sync", "imagenet10", "val", "jpeg", "--deep"]) == 0
+    out = capsys.readouterr().out
+    assert "sha256 mismatch in cache: image.bin (will re-fetch)" in out
+    assert env.downloads[-1][2] == ["image.bin"]
+    assert (target / "image.bin").read_bytes() == b"i" * 3000
+
+
+def test_status_deep_without_hashes_is_unavailable(env, capsys):
+    _synced(env)
+    capsys.readouterr()
+    assert cli.main(["status", "--no-remote", "--deep", "--json"]) == 0
+    row = next(d for d in json.loads(capsys.readouterr().out)["datasets"] if d["cache_name"] == IN10_VAL)
+    assert row["deep_status"] == "unavailable"
+
+
+def test_status_shows_live_sync(env, capsys):
+    import os
+    import socket
+
+    lock = env.root / f".{IN10_VAL}.sync.lock"
+    lock.write_text(json.dumps({"user": "alice", "host": socket.gethostname(), "pid": os.getpid(),
+                                "started": 0, "token": "t"}))
+    cli.main(["status", "--no-remote", "--json"])
+    row = next(d for d in json.loads(capsys.readouterr().out)["datasets"] if d["cache_name"] == IN10_VAL)
+    assert row["local_status"] == "syncing" and row["sync_lock"]["user"] == "alice"
+    assert row["sync_lock"]["stale"] is None
+
+
+def test_shared_dir_files_group_writable(env, capsys):
+    import os
+    import stat
+
+    os.chmod(env.root, 0o2775)
+    target = _synced(env)
+    for p in target.iterdir():
+        assert p.stat().st_mode & stat.S_IWGRP, p
+
+
+def test_ensure_cache_syncs_then_is_idempotent(env):
+    target = env.root / IN10_VAL
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, log=lambda m: None)
+    assert res.ok and (target / MANIFEST).exists() and res.fetched_files == 3
+
+
+def test_ensure_cache_waits_for_another_sync(env):
+    import os
+    import socket
+    import threading
+    import time
+
+    target = env.root / IN10_VAL
+    lock = cli.cache_sync.lock_path(target)
+    lock.write_text(json.dumps({"user": "bob", "host": socket.gethostname(), "pid": os.getpid(),
+                                "started": 0, "token": "t"}))
+
+    def other_sync_finishes():
+        time.sleep(0.3)
+        objs = env.s3fake.remote(IN10_VAL_REMOTE)
+        target.mkdir()
+        for n, b in objs.items():
+            (target / n).write_bytes(b)
+        lock.unlink()
+
+    threading.Thread(target=other_sync_finishes).start()
+    logs: list[str] = []
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, poll_s=0.05, log=logs.append)
+    assert res.ok
+    assert any("waiting for another sync" in m and "bob@" in m for m in logs)
+    assert env.downloads == []  # used bob's copy, no second download
+
+
+def test_ensure_cache_raises_on_failure(env):
+    env.s3fake.fail_after = 0
+    with pytest.raises(RuntimeError, match="s5cmd reported errors"):
+        cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, env.root / IN10_VAL, log=lambda m: None)

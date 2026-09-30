@@ -2,11 +2,30 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [0.14.0] - 2026-09-30
+
+### Added
+- **Safe sync onto shared cache dirs** (`visionlab.datasets.sync`, used by `visionlab-datasets sync`
+  and by `load()` / video-store download when a cache is missing):
+  - per-cache lock `.<cache>.sync.lock` (O_EXCL; owner/host/pid/start; 60 s heartbeat; stale when
+    the process is gone or the heartbeat is > 15 min old, then broken automatically; `--break-lock`);
+    a live lock makes `sync` exit 1 untouched, and `load()` waits for the other sync instead.
+  - download into `.<cache>.sync.partial/`, verify (size; sha256 when the manifest has `file_sha256`),
+    rename into place with `manifest.json` last. Nothing in the cache is ever deleted. On failure the
+    staging dir is kept with `SYNC_INCOMPLETE.json` and the next sync resumes from it.
+  - repair: only missing / wrong-size files are fetched (`--deep`: also right-size files whose sha256
+    mismatches). A remote manifest that differs from the local one (cache rebuilt) is refused without `--force`.
+  - group-writable files in group-writable cache dirs; progress and MB/s per sync.
+- `status --deep` (sha256 against `file_sha256`; `unavailable` for manifests without hashes; mismatch
+  is a problem, exit 1). `status --json` rows gain `sync_lock`, `sync_partial`, `deep_status`,
+  `deep_problems`; a live sync shows as `syncing`.
 
 ### Changed
+- `sync` no longer calls slipstream's `download_s3_cache` (which copied straight into the cache dir);
+  it drives `s5cmd run` itself. `load()` for image and video stores uses the same path.
 - Dev pin and README examples moved to slipstream v0.9.5 (0.9.3: decoder always relinked; 0.9.4: loader prefers this interpreter's decoder build; 0.9.5: fixes a 10-20x SlipstreamLoader threading slowdown under numba 0.67).
   Consumers of 0.13.1 can already use it by pinning `@v0.9.5`.
+- README: netscratch guidance (sync repairs purged caches) replaces "do not use netscratch".
 
 ## [0.13.1] - 2026-09-30
 
