@@ -41,6 +41,12 @@ video = [
     "pyarrow",
     "scipy",
 ]
+procthor = [
+    # ProcTHOR r160 H5 walks (blosc-zstd frames): benchmarks/bench_procthor_h5.py and conversion
+    "h5py",
+    "hdf5plugin",
+    "pyyaml",
+]
 dev = [
     # datasets' own env pins slipstream here, not in [tool.uv.sources]: uv applies a git dep's sources
     # to consumers, which would force this tag on them.
