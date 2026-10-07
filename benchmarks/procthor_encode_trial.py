@@ -31,7 +31,14 @@ LEN_WINDOW, STRIDE = 61, 60
 CODECS = {
     "jpeg_q100_420": ("jpeg", dict(quality=100, subsampling=2)),
     "jpeg_q100_444": ("jpeg", dict(quality=100, subsampling=0)),
+    "h264_crf6": ("mp4", dict(codec="libx264", crf=6)),
+    "h264_crf10": ("mp4", dict(codec="libx264", crf=10)),
+    "h264_crf14": ("mp4", dict(codec="libx264", crf=14)),
     "h264_crf18": ("mp4", dict(codec="libx264", crf=18)),
+    "h264_444_crf10": ("mp4", dict(codec="libx264", crf=10, pix_fmt="yuv444p")),
+    "h264_444_crf14": ("mp4", dict(codec="libx264", crf=14, pix_fmt="yuv444p")),
+    "h265_crf10": ("mp4", dict(codec="libx265", crf=10)),
+    "h265_crf14": ("mp4", dict(codec="libx265", crf=14)),
     "h264_crf23": ("mp4", dict(codec="libx264", crf=23)),
     "h265_crf23": ("mp4", dict(codec="libx265", crf=23)),
     "h265_crf29": ("mp4", dict(codec="libx265", crf=29)),
@@ -55,12 +62,12 @@ def encode_jpeg(frames: np.ndarray, quality: int, subsampling: int) -> list[byte
     return out
 
 
-def encode_mp4(frames: np.ndarray, codec: str, crf: int, fps: int = 30) -> bytes:
+def encode_mp4(frames: np.ndarray, codec: str, crf: int, pix_fmt: str = "yuv420p", fps: int = 30) -> bytes:
     import av
     b = io.BytesIO()
     with av.open(b, "w", format="mp4") as c:
         s = c.add_stream(codec, rate=fps)
-        s.width, s.height, s.pix_fmt = frames.shape[2], frames.shape[1], "yuv420p"
+        s.width, s.height, s.pix_fmt = frames.shape[2], frames.shape[1], pix_fmt
         s.time_base = Fraction(1, fps)
         if codec == "libx265":
             s.options = {"crf": str(crf), "preset": "medium", "x265-params": f"keyint={STRIDE}:min-keyint={STRIDE}:scenecut=0:log-level=error"}
