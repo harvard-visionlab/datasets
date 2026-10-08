@@ -93,6 +93,11 @@ and `t0 = (s + 0.5) / 30` (mid-frame, so float rounding cannot select a neighbou
   colour edges); 4:4:4 crf 10 gives 42.6 dB mean (objects; ~46 empty) at 2.4 MB/walk, 12× smaller than the H5 files,
   and was judged indistinguishable from the originals in a blink comparison (George, 2026-10-08). JPEG q100 4:2:0
   (40.5 dB, 12 MB/walk) also looked identical but is 5× larger and was slower in slipstream (per-frame records).
+- **Not byte-reproducible.** libx264 (PyAV 18.1 wheel, core 165) gives slightly different bitstreams on repeated
+  encodes of the same frames even with `threads=1 lookahead_threads=1` (checked 2026-10-08; swscale rgb→yuv444p is
+  deterministic, so it is the encoder). Hence slipstream's build-time "Bytes mismatch" sanity warning (it re-encodes and
+  compares). Rebuilds are equivalent in quality, not identical: `verify` (PSNR against the H5, bit-identical poses) is
+  the check, and `store_manifest.json` + the `manifest.json` sha256s identify the published bytes.
 - **GOP 60** = window stride, so no window decodes frames it does not return.
 - **One record per walk** (not per window or frame): windows overlap the walk's GOPs exactly; positions/headings ride
   along as fixed-size array fields.
