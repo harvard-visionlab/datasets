@@ -121,8 +121,9 @@ ax.plot(pos[:, 0], pos[:, 1], lw=0.6, color="0.6", label="whole walk")
 w = slice(start, start + 61)
 ax.plot(pos[w, 0], pos[w, 1], lw=2, label=f"window {start}-{start + 60}")
 q = slice(start, start + 61, 10)
-ax.quiver(pos[q, 0], pos[q, 1], np.cos(head[q]), np.sin(head[q]), scale=15, width=0.006)
-ax.set_aspect("equal"); ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)"); ax.legend(); plt.show()
+# facing direction = (-sin h, -cos h) (generator convention, see the card); y axis down so the view is not mirrored
+ax.quiver(pos[q, 0], pos[q, 1], -np.sin(head[q]), -np.cos(head[q]), angles="xy", scale=15, width=0.006)
+ax.set_aspect("equal"); ax.invert_yaxis(); ax.set_xlabel("x (m)"); ax.set_ylabel("y (m, down)"); ax.legend(); plt.show()
 
 # %% [markdown]
 # **Egomotion** (the world model's movement input): the step between frames t and t+1 rotated into the agent's frame at
