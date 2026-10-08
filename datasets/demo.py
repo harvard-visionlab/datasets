@@ -34,7 +34,7 @@ class DownloadPlan:
         return None if self.size_bytes is None else self.size_bytes / 1e9
 
     def __str__(self) -> str:
-        size = "unknown (no S3 access?)" if self.size_bytes is None else f"{self.size_gb:,.2f} GB"
+        size = "unknown (not on S3, or no S3 access)" if self.size_bytes is None else f"{self.size_gb:,.2f} GB"
         where = (f"already available locally at {self.local_path}" if self.local_path
                  else f"NOT cached: load() will download {size} to {self.download_to}")
         return (f"{self.dataset} split={self.split!r}\n  store    {self.store}\n  S3       {self.remote}  ({size})\n"
@@ -69,7 +69,7 @@ def download_plan(name: str, split: str | None = None, split_version: str | None
     size = None
     try:
         from .sync import list_remote_files
-        size = sum(list_remote_files(remote).values())
+        size = sum(list_remote_files(remote).values()) or None      # 0 = nothing listed (not uploaded / no access)
     except Exception:
         pass
     plan = DownloadPlan(name, split, store_name(remote), remote, size, local, cache_base / store_name(remote))

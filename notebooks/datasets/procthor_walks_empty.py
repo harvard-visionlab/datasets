@@ -168,5 +168,5 @@ loader.shutdown()
 # Deletes only a personal download (shared lab copies on the cluster or the QNAP are refused). Dry run first.
 
 # %%
-remove_local_copy(ds)                 # what would be deleted
+remove_local_copy(ds);                # what would be deleted (dry run)
 # remove_local_copy(ds, confirm=True) # uncomment to delete

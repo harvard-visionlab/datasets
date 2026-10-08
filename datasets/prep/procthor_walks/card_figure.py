@@ -57,8 +57,8 @@ def main(argv=None) -> int:
     f_emp, pos_e, _ = load_walk(emp, i)
     assert np.array_equal(pos, pos_e)
 
-    fig = plt.figure(figsize=(13, 4.6))
-    gs = fig.add_gridspec(2, len(SHOW) + 2, width_ratios=[1] * len(SHOW) + [0.08, 2.1], wspace=0.05, hspace=0.08)
+    fig = plt.figure(figsize=(12, 7.2))
+    gs = fig.add_gridspec(3, len(SHOW), height_ratios=[1, 1, 1.5], wspace=0.04, hspace=0.12)
     for r, (frames, label) in enumerate([(f_obj, "objects"), (f_emp, "empty")]):
         for k, t in enumerate(SHOW):
             ax = fig.add_subplot(gs[r, k])
@@ -68,18 +68,19 @@ def main(argv=None) -> int:
                 ax.set_title(f"step {START + t}", fontsize=9)
             if k == 0:
                 ax.set_ylabel(label, fontsize=10)
-    ax = fig.add_subplot(gs[:, -1])
-    ax.plot(pos[:, 0], pos[:, 1], lw=0.6, color="0.65", label="whole walk (1,000 steps)")
+    ax = fig.add_subplot(gs[2, :])
+    ax.plot(pos[:, 0], pos[:, 1], lw=0.5, color="0.7", label="whole walk (1,000 steps)")
     w = slice(START, START + LEN_WINDOW)
-    ax.plot(pos[w, 0], pos[w, 1], lw=2, color="C1", label=f"window shown ({START}-{START + LEN_WINDOW - 1})")
+    ax.plot(pos[w, 0], pos[w, 1], lw=1.8, color="C1", label=f"window shown (steps {START}-{START + LEN_WINDOW - 1})")
     q = np.array(SHOW) + START
     fx, fy = facing(head[q])
-    ax.quiver(pos[q, 0], pos[q, 1], fx, fy, color="C1", angles="xy", scale=12, width=0.008)
+    ax.quiver(pos[q, 0], pos[q, 1], fx, fy, color="k", angles="xy", scale_units="xy", scale=3, width=0.003,
+              label="facing direction at the frames shown")
     ax.set_aspect("equal")
     ax.invert_yaxis()                                    # y down = top-down view, not mirrored (see facing())
     ax.set_xlabel("x (m)"), ax.set_ylabel("y (m, down)")
-    ax.legend(fontsize=8, loc="best")
-    ax.set_title(f"{row.clip_id}: {row.n_rooms} rooms, {row.n_objects} objects", fontsize=9)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
+    ax.set_title(f"{row.clip_id}: {row.n_rooms} rooms, {row.n_objects} objects, top-down path", fontsize=9)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(a.out, dpi=130, bbox_inches="tight")
     print(f"wrote {a.out} ({row.clip_id})")
