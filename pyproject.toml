@@ -98,5 +98,6 @@ packages = [
   "visionlab.datasets._configs",
   "visionlab.datasets.prep",
   "visionlab.datasets.prep.spatialvid_hq",
+  "visionlab.datasets.prep.procthor_walks",
   "visionlab.datasets.downloads",
 ]
