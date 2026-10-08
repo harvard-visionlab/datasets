@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from .common import DATASETS, FPS, H, N_STEPS, W, read_walk
+from .common import DATASETS, FPS, N_STEPS, H, W, read_walk
 
 LEN_WINDOW = 61
 
@@ -54,9 +55,15 @@ def main(argv=None) -> int:
         if not (len(idx) == len(rec) and (idx["clip_id"].to_numpy() == rec["clip_id"].to_numpy()).all()):
             fails.append("records.parquet clip_id order differs from index/walks.parquet")
     vf = cache.fields["video"]
+    lock = threading.Lock()   # field.load_batch reuses one output buffer per field: not thread-safe
+
+    def read(field, i: int) -> dict:
+        with lock:
+            out = field.load_batch(np.array([i], dtype=np.int64), parallel=False)
+            return {k: np.array(v, copy=True) for k, v in out.items()}
 
     def blob(i: int) -> bytes:
-        out = vf.load_batch(np.array([i], dtype=np.int64), parallel=False)
+        out = read(vf, i)
         return bytes(out["data"][0][: int(out["sizes"][0])])
 
     def meta_ok(i: int) -> str | None:
@@ -80,8 +87,8 @@ def main(argv=None) -> int:
         frames, pos, head, _ = read_walk(rec["src_path"].iloc[i])
         d = VideoDecoder(blob(i), seek_mode="exact", num_ffmpeg_threads=1, dimension_order="NHWC")
         win = d.get_frames_in_range(s, s + LEN_WINDOW).data.numpy()
-        p = np.asarray(pos_f.load_batch(np.array([i], dtype=np.int64))["data"][0])
-        h = np.asarray(head_f.load_batch(np.array([i], dtype=np.int64))["data"][0])
+        p = read(pos_f, i)["data"][0]
+        h = read(head_f, i)["data"][0]
         same = np.array_equal(p.reshape(N_STEPS, 2), pos) and np.array_equal(h.reshape(N_STEPS), head)
         return psnr(win, frames[s:s + LEN_WINDOW]), same
 
