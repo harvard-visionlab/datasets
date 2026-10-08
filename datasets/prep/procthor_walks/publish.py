@@ -42,6 +42,7 @@ def main(argv=None) -> int:
     s3 = f"{S3_BASE}/{a.dataset}"
     if not a.skip_lab:
         run(["rsync", "-a", "--chmod=Dg+rwxs,Fg+rw", f"{a.store}/", f"{LAB_BASE / a.store.name}/"], a.dry_run)
+        run(["mkdir", "-p", str(LAB_BASE / a.dataset)], a.dry_run)          # rsync creates only the last level
         run(["rsync", "-a", f"{splits}/", f"{LAB_BASE / a.dataset / 'splits'}/"], a.dry_run)
     run([a.s5cmd, "sync", "--concurrency", "8", f"{a.store}/", f"{s3}/{a.store.name}/"], a.dry_run)
     run([a.s5cmd, "sync", f"{splits}/", f"{s3}/splits/"], a.dry_run)
