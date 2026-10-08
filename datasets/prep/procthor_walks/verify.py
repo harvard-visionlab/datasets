@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -55,12 +54,10 @@ def main(argv=None) -> int:
         if not (len(idx) == len(rec) and (idx["clip_id"].to_numpy() == rec["clip_id"].to_numpy()).all()):
             fails.append("records.parquet clip_id order differs from index/walks.parquet")
     vf = cache.fields["video"]
-    lock = threading.Lock()   # field.load_batch reuses one output buffer per field: not thread-safe
 
-    def read(field, i: int) -> dict:
-        with lock:
-            out = field.load_batch(np.array([i], dtype=np.int64), parallel=False)
-            return {k: np.array(v, copy=True) for k, v in out.items()}
+    def read(field, i: int) -> dict:   # load_batch returns views into a per-thread buffer (slipstream >= 0.11.1): copy
+        out = field.load_batch(np.array([i], dtype=np.int64), parallel=False)
+        return {k: np.array(v, copy=True) for k, v in out.items()}
 
     def blob(i: int) -> bytes:
         out = read(vf, i)
