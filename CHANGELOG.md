@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [0.18.0] - 2026-10-08
+
+### Added
+- Datasets `procthor-walks-objects` and `procthor-walks-empty`: 24,000 paired 1,000-step Brownian walks each through
+  ProcTHOR-10k houses (furnished / same houses emptied), rendered in AI2-THOR 5.0.0 at 160x120 by Rupert
+  Tawiah-Quashie (Harvard Vision Lab). Stores: h264 yuv444p crf 10, GOP 60, one record per walk (video + positions +
+  headings), one store per source folder (objects 46.5 / 4.5 / 4.5 GB, empty 35.8 / 3.5 / 3.5 GB). Splits `v1`
+  (ProcTHOR house split) and `rtq-r160` (the student's r160 runs). Card: `datasets/cards/procthor-walks.md`; demo
+  notebooks `notebooks/datasets/procthor_walks_{objects,empty}.ipynb`; reproducible build
+  `datasets/prep/procthor_walks/` (index, encode, verify, publish, card_figure).
+- Video configs may map a store key to `{part: S3 path}`; `load()` picks the part holding the requested split
+  (`video_dataset.store_part`).
+- `visionlab.datasets.demo`: `download_plan` (store, S3 size, local path, before downloading) and
+  `remove_local_copy` (refuses shared lab copies).
+- `procthor` dependency group and ProcTHOR loader/codec benchmarks in `benchmarks/`.
+
+### Changed
+- Dev pin slipstream v0.11.1 (thread-safe `load_batch`); range unchanged (`>=0.9,<0.12`).
+
 ## [0.17.1] - 2026-09-30
 
 ### Changed
