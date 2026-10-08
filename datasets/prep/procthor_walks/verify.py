@@ -50,6 +50,7 @@ def main(argv=None) -> int:
         fails.append(f"store has {len(cache)} records, records.parquet {len(rec)}")
     if a.out:
         idx = pd.read_parquet(a.out / a.dataset / "index" / "walks.parquet")
+        idx = idx[idx["folder"] == rec["folder"].iloc[0]]
         if not (len(idx) == len(rec) and (idx["clip_id"].to_numpy() == rec["clip_id"].to_numpy()).all()):
             fails.append("records.parquet clip_id order differs from index/walks.parquet")
     vf = cache.fields["video"]

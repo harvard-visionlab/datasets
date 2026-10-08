@@ -5,7 +5,7 @@ import pytest
 
 from visionlab.datasets.registry import get_config
 from visionlab.datasets.video import camera_center, camera_centers, ego_motion, interpolate_poses, interpolate_poses_batched, relative_motion
-from visionlab.datasets.video_dataset import VideoDataset, WindowSampler, _npy_rows, rank_stores, select_clips
+from visionlab.datasets.video_dataset import VideoDataset, WindowSampler, _npy_rows, rank_stores, select_clips, store_part
 
 STORES = get_config("spatialvid-hq").stores
 
@@ -154,3 +154,31 @@ def test_npy_rows_vectorised_and_fallback():
     data, sizes = pack([blob(arrs[0]), blob(arrs[1], version=(2, 0)), blob(arrs[2])])   # a v2.0 header -> np.load fallback
     vals, n = _npy_rows(data, sizes, np.dtype("<f4"), 7)
     assert list(n) == [1, 63, 90] and all(np.array_equal(vals[i, : n[i]], arrs[i]) for i in range(3))
+
+
+@pytest.mark.parametrize("name", ["procthor-walks-objects", "procthor-walks-empty"])
+def test_procthor_walks_configs(name):
+    cfg = get_config(name)
+    assert cfg.is_video and set(cfg.splits) == {"v1", "rtq-r160"} and not cfg.subsets
+    assert rank_stores(cfg.stores, "h264", "160x120", None, None) == [("h264", "160x120", None)]
+    assert set(cfg.stores[("h264", "160x120", None)]) == {"train", "val", "test"}
+    m = cfg.metadata
+    assert m["default_split_version"] in cfg.splits and m["default_subset"] is None
+    assert m["num_train"] + m["num_val"] + m["num_test"] == m["num_records"] == 24_000
+    assert m["window"]["starts"][-1] + m["window"]["len"] <= m["num_frames"]
+    assert len(m["stats"]["rgb"]["mean"]) == 3
+
+
+def test_store_part_picks_folder_store():
+    parts = {"train": "s3://b/x-train", "val": "s3://b/x-val", "test": "s3://b/x-test"}
+    split = pd.DataFrame({"clip_id": ["train/h0/s0", "train/h1/s0", "val/h2/s0", "test/h3/s0", "val/h4/s0"],
+                          "split": ["train", "val", "val_unseen", "test", "unused"]})
+    assert store_part("s3://b/whole", split, "anything") == "s3://b/whole"
+    assert store_part(parts, split, "train") == "s3://b/x-train"
+    assert store_part(parts, split, "val") == "s3://b/x-train"          # rtq-r160 style: val walks live in the train folder
+    assert store_part(parts, split, "val_unseen") == "s3://b/x-val"
+    with pytest.raises(ValueError):
+        store_part(parts, split, "all")
+    mixed = split.assign(split=["train", "train", "train", "test", "unused"])
+    with pytest.raises(ValueError):
+        store_part(parts, mixed, "train")                                 # spans two parts

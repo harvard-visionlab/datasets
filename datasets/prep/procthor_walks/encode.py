@@ -1,8 +1,9 @@
 """Stage 2: encode every walk of one dataset into its slipstream video store.
 
-    python -m datasets.prep.procthor_walks.encode --dataset procthor-walks-objects --out <work> --store-root <dir> --workers 32
+    python -m datasets.prep.procthor_walks.encode --dataset procthor-walks-objects --folder train --out <work> --store-root <dir> --workers 32
 
-Reads <work>/<dataset>/index/walks.parquet (stage 1) and writes <store-root>/<dataset>-h264-160x120/:
+Reads <work>/<dataset>/index/walks.parquet (stage 1) and writes one store per source folder,
+<store-root>/<dataset>-h264-160x120-<folder>/:
 slipstream fields (one record per walk, record_idx = walks.parquet order)
     video        bytes           mp4: h264 yuv444p crf 10, GOP 60, 30 fps (common.ENCODE), frame i at pts i
     positions    float32[1000,2] agent (x, y) per step, metres (source agent_positions)
@@ -10,7 +11,7 @@ slipstream fields (one record per walk, record_idx = walks.parquet order)
     fps          float           30 (container convention; the walks have no time axis)
     num_frames   int             1000
     duration_s   float           num_frames / fps
-plus records.parquet (record_idx -> clip_id and the walk metadata, from walks.parquet) and store_manifest.json
+plus records.parquet (record_idx -> clip_id, walk_idx (the stage-1 index across folders) and the walk metadata) and store_manifest.json
 (encode settings, software versions, source, counts). `--limit N` builds a test store of the first N walks.
 """
 from __future__ import annotations
@@ -58,14 +59,17 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True, type=Path, help="work dir of stage 1")
     ap.add_argument("--store-root", required=True, type=Path)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--folder", required=True, choices=["train", "val", "test"], help="one store per source folder")
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args(argv)
     from slipstream.cache import OptimizedCache
 
     walks = pd.read_parquet(a.out / a.dataset / "index" / "walks.parquet")
+    walks = walks[walks["folder"] == a.folder].rename(columns={"record_idx": "walk_idx"}).reset_index(drop=True)
+    walks.insert(0, "record_idx", range(len(walks)))          # record_idx is per store; walk_idx = index across folders
     if a.limit:
         walks = walks.iloc[:a.limit]
-    name = store_name(a.dataset) + (f"-test{a.limit}" if a.limit else "")
+    name = store_name(a.dataset, a.folder) + (f"-limit{a.limit}" if a.limit else "")
     store = a.store_root / name
     if store.exists() and any(store.iterdir()):
         sys.exit(f"{store} exists and is not empty; remove it to rebuild")
@@ -78,7 +82,7 @@ def main(argv=None) -> int:
         sys.exit(f"store has {len(cache)} records, expected {len(walks)}")
     walks.to_parquet(store / "records.parquet", index=False)
     vbytes = sum(p.stat().st_size for p in store.glob("video*") if p.is_file())
-    sm = dict(dataset=a.dataset, store=name, num_records=len(walks), cell=DATASETS[a.dataset]["cell"], source=str(SRC_DATA),
+    sm = dict(dataset=a.dataset, store=name, folder=a.folder, num_records=len(walks), cell=DATASETS[a.dataset]["cell"], source=str(SRC_DATA),
               encode=ENCODE, fields=WalkSource([], store).field_types, software=software_versions(),
               video_bytes=vbytes, encode_seconds=round(dt), built=time.strftime("%Y-%m-%dT%H:%M:%S"),
               counts=walks["folder"].value_counts().to_dict())

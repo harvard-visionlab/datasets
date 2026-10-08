@@ -30,7 +30,8 @@ class DatasetConfig:
         remote_cache: Mapping of (split, fmt) → S3 remote cache path (image datasets: one store per split).
         metadata: Arbitrary extra metadata (label maps, class lists, etc.).
         stores: Video datasets: mapping of (fmt, res, fps) → S3 store path; fps None = native frame rate. Splits
-            are index sets, not stores.
+            are index sets, not stores. The value may also be {part: S3 path} for a store partitioned by clip_id
+            prefix (`<part>/...`, e.g. one store per source folder); load() picks the part holding the split.
         splits: Video datasets: split version → S3 parquet (clip_id → split).
         subsets: Video datasets: subset name → S3 parquet (the clip population of a named subset).
     """
@@ -38,7 +39,7 @@ class DatasetConfig:
     num_classes: int
     remote_cache: dict[tuple[str, str], str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    stores: dict[tuple, str] = field(default_factory=dict)
+    stores: dict[tuple, Any] = field(default_factory=dict)
     splits: dict[str, str] = field(default_factory=dict)
     subsets: dict[str, str] = field(default_factory=dict)
 

@@ -43,8 +43,9 @@ ENCODE = dict(codec="libx264", crf=10, preset="medium", pix_fmt="yuv444p", gop=6
 FPS = ENCODE["fps"]
 
 
-def store_name(dataset: str) -> str:
-    return f"{dataset}-{FMT}-{RES}"
+def store_name(dataset: str, folder: str) -> str:
+    """One store per source folder: e.g. procthor-walks-objects-h264-160x120-val."""
+    return f"{dataset}-{FMT}-{RES}-{folder}"
 
 
 def clip_id(folder: str, house: str, seed: str) -> str:

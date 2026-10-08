@@ -75,6 +75,22 @@ def rank_stores(stores: dict[StoreKey, str], fmt: str, res: str, rate_hz: float 
     return [k for _, k in sorted(ok, key=lambda x: x[0])]
 
 
+def store_part(remote: "str | dict[str, str]", split_df, split: str) -> str:
+    """A store entry is one S3 path, or {part: path} for a store partitioned by clip_id prefix (`<part>/...`, e.g. one
+    store per source folder). Pick the part that holds every clip of `split` in the split table."""
+    if isinstance(remote, str):
+        return remote
+    if split == "all":
+        raise ValueError(f"split='all' spans the store parts {sorted(remote)}; load one split at a time")
+    ids = split_df.loc[split_df["split"] == split, "clip_id"]
+    if ids.empty:
+        raise ValueError(f"split {split!r} is empty in this split table")
+    parts = set(ids.str.split("/", n=1).str[0])
+    if len(parts) != 1 or not parts <= set(remote):
+        raise ValueError(f"split {split!r} spans store parts {sorted(parts)}; registered parts: {sorted(remote)}")
+    return remote[parts.pop()]
+
+
 # ----------------------------------------------------------------------------- local / remote resolution
 
 def local_roots(tree: str) -> list[Path]:
@@ -392,15 +408,21 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
     split_version = split_version or meta.get("default_split_version")
     cache_base = Path(configure_slipstream_cache())
 
+    # split table first: a store may be partitioned by clip_id prefix (one store per source folder)
+    if split_version not in config.splits:
+        raise KeyError(f"unknown split version {split_version!r}; available: {sorted(config.splits)}")
+    split_df = pd.read_parquet(resolve_file(f"splits/{split_version}.parquet", config.splits[split_version], tree, cache_base))
+
     # store
-    store_dir = key = None
+    store_dir = key = remote = None
     for k in rank_stores(config.stores, fmt, res, rate_hz, fps):
-        store_dir = resolve_store(config.stores[k], tree, cache_base, download=download)
+        r = store_part(config.stores[k], split_df, split)
+        store_dir = resolve_store(r, tree, cache_base, download=download)
         if store_dir is not None:
-            key = k; break
-        if store_name(config.stores[k]) not in _WARNED:      # once per process per store
-            _WARNED.add(store_name(config.stores[k]))
-            warnings.warn(f"{config.name}: store {store_name(config.stores[k])} is registered but not built/synced yet; trying the next one", stacklevel=3)
+            key, remote = k, r; break
+        if store_name(r) not in _WARNED:      # once per process per store
+            _WARNED.add(store_name(r))
+            warnings.warn(f"{config.name}: store {store_name(r)} is registered but not built/synced yet; trying the next one", stacklevel=3)
     if store_dir is None:
         raise FileNotFoundError(f"{config.name}: no usable store for fmt={fmt} res={res} rate_hz={rate_hz} fps={fps}")
     cache = OptimizedCache.load(store_dir, verbose=False)
@@ -410,9 +432,6 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
     for n, arr in _store_scalars(store_dir, ("fps", "duration_s", "src_fps", "src_num_frames")).items():
         records[n] = np.asarray(arr)[records["record_idx"].to_numpy()]
     # the split table is always joined (also for split="all"): it carries the channel / carrier / strata columns for `where`
-    if split_version not in config.splits:
-        raise KeyError(f"unknown split version {split_version!r}; available: {sorted(config.splits)}")
-    split_df = pd.read_parquet(resolve_file(f"splits/{split_version}.parquet", config.splits[split_version], tree, cache_base))
     subset_df = None
     if subset is None:
         subset = meta.get("default_subset")          # the population; subset="all" = every clip in the store
@@ -423,5 +442,5 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
             raise KeyError(f"unknown subset {subset!r}; available: {sorted(config.subsets)}")
         subset_df = pd.read_parquet(resolve_file(f"subsets/{subset}.parquet", config.subsets[subset], tree, cache_base))
     clips = select_clips(records, split_df, split, subset_df, where, channel_cap, seed)
-    stats = (meta.get("stats") or {}).get(store_name(config.stores[key])) or (meta.get("stats") or {}).get("rgb")
+    stats = (meta.get("stats") or {}).get(store_name(remote)) or (meta.get("stats") or {}).get("rgb")
     return VideoDataset(config.name, key, store_dir, cache, clips, split, subset, rate_hz, stats)
