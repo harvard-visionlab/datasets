@@ -20,6 +20,8 @@ what ``slipstream hash`` would write.
     python -m visionlab.datasets.prep.hash_masters compare hashes/s3 hashes/lab
     python -m visionlab.datasets.prep.hash_masters publish-s3 hashes/s3 --confirmed-by hashes/lab
     python -m visionlab.datasets.prep.hash_masters apply-local /n/lab_storage/.../slipstream hashes/lab
+
+``--video`` does the same for the registry's video store parts (``stores``); use ``--only`` to pick them.
 """
 from __future__ import annotations
 
@@ -38,15 +40,21 @@ MANIFEST = "manifest.json"
 BACKUP_PREFIX = "s3://visionlab-datasets/slipstream-cache-manifest-backups"
 
 
-def image_caches(only: list[str] | None = None) -> list[tuple[str, str]]:
-    """``(cache_name, remote)`` for every registry image cache (video stores are separate)."""
+def image_caches(only: list[str] | None = None, video: bool = False) -> list[tuple[str, str]]:
+    """``(cache_name, remote)`` for every registry image cache, or with ``video`` every video store part."""
     out = []
     for n in list_datasets():
-        for (_split, _fmt), remote in get_config(n).remote_cache.items():
+        cfg = get_config(n)
+        if video:
+            remotes = [r for v in (getattr(cfg, "stores", None) or {}).values()
+                       for r in (v.values() if isinstance(v, dict) else [v])]
+        else:
+            remotes = list(cfg.remote_cache.values())
+        for remote in remotes:
             name = remote.rstrip("/").rsplit("/", 1)[-1]
             if not only or name in only:
                 out.append((name, remote.rstrip("/") + "/"))
-    return sorted(out)
+    return sorted(set(out))
 
 
 def data_files(manifest: dict) -> list[str]:
@@ -130,7 +138,7 @@ def cmd_hash_s3(args) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rc = 0
-    for name, remote in image_caches(args.only):
+    for name, remote in image_caches(args.only, args.video):
         dest = out / f"{name}.json"
         raw = s3_get(remote + MANIFEST)
         man = json.loads(raw)
@@ -177,7 +185,7 @@ def cmd_hash_local(args) -> int:
     base, out = Path(args.base), Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rc = 0
-    for name, remote in image_caches(args.only):
+    for name, remote in image_caches(args.only, args.video):
         d = base / name
         if not (d / MANIFEST).exists():
             print(f"- {name}: not in {base}")
@@ -281,7 +289,7 @@ def cmd_apply_local(args) -> int:
     from visionlab.datasets.sync import same_cache_version
 
     base, local_hashes, rc = Path(args.base), _load(args.hashes), 0
-    for name, remote in image_caches(args.only):
+    for name, remote in image_caches(args.only, args.video):
         d = base / name
         if not (d / MANIFEST).exists():
             continue
@@ -335,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dry-run", action="store_true")
     for s in sub.choices.values():
         s.add_argument("--only", nargs="*", default=None, help="cache names to limit to")
+        s.add_argument("--video", action="store_true", help="video store parts (registry `stores`) instead of image caches")
     args = p.parse_args(argv)
     return {"hash-s3": cmd_hash_s3, "hash-local": cmd_hash_local, "compare": cmd_compare,
             "publish-s3": cmd_publish_s3, "apply-local": cmd_apply_local}[args.cmd](args)
