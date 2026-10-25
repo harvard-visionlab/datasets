@@ -3673,7 +3673,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "seaborn" },
-    { name = "visionlab-slipstream", git = "https://github.com/harvard-visionlab/slipstream.git?rev=v0.11.1" },
+    { name = "visionlab-slipstream", git = "https://github.com/harvard-visionlab/slipstream.git?rev=v0.11.2" },
 ]
 procthor = [
     { name = "h5py" },
@@ -3692,8 +3692,8 @@ video = [
 
 [[package]]
 name = "visionlab-slipstream"
-version = "0.11.1"
-source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=v0.11.1#7e3d58f5f8d8214008c29b7dc881e78dfd1f67a6" }
+version = "0.11.2"
+source = { git = "https://github.com/harvard-visionlab/slipstream.git?rev=v0.11.2#d51fd3384b6fd600ecf483f918b54f3c2a3b1a3f" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },

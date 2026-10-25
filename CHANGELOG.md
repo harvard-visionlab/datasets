@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [0.18.1] - 2026-10-25
+
+### Changed
+- Dev pin slipstream v0.11.2 (distributed `SlipstreamLoader` with `drop_last=True` truncates instead of padding, so no
+  duplicate samples); range unchanged (`>=0.9,<0.12`).
+
+### Added
+- `prep.hash_masters --video`: hash/compare/publish/apply for the registry's video store parts (used to verify the
+  procthor-walks stores on S3, lab_storage and netscratch).
+
 ## [0.18.0] - 2026-10-08
 
 ### Added
