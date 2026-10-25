@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [0.19.0] - 2026-10-25
+
+### Added
+- ImageNet val originals, `fmt="original"`: `load("imagenet1k", split="val", fmt="original")` (50,000) and
+  `load("imagenet100", split="val", fmt="original")` (5,000). The ILSVRC2012 val JPEGs as distributed: no resize or
+  re-encode (899 grayscale + 1 CMYK kept as-is), so a model's own test transform reproduces published accuracy.
+  Fields: image, label, index, path (`<wnid>/<file>`), val_id (ground-truth line); imagenet100 adds in100_label /
+  in1000_label. 6.71 / 0.69 GB, private on S3. Build / verify / accuracy check: `prep/imagenet_original*.py`; card
+  `datasets/cards/imagenet-val-original.md`.
+- `load()` results carry `.identity` (`cache_identity(dir)`): `"sha256:..."` over the manifest's sample count and
+  per-file sha256, for pinning evaluations to exact bytes.
+
 ## [0.18.1] - 2026-10-25
 
 ### Changed
