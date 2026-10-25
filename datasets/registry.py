@@ -73,6 +73,24 @@ def get_config(name: str) -> DatasetConfig:
     return REGISTRY[name]
 
 
+def cache_identity(cache_dir) -> "str | None":
+    """Content identity of a slipstream store: ``"sha256:<hex>"`` over its manifest's sample count and per-file sha256.
+
+    Changes if and only if a stored byte (or the sample count) changes; independent of manifest formatting, the
+    local path and the visionlab.datasets version. ``None`` when the manifest has no ``file_sha256``.
+    """
+    import hashlib
+    import json
+    from pathlib import Path
+
+    m = json.loads((Path(cache_dir) / "manifest.json").read_text())
+    if not m.get("file_sha256"):
+        return None
+    body = json.dumps({"num_samples": m["num_samples"], "file_sha256": m["file_sha256"]}, sort_keys=True,
+                      separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(body.encode()).hexdigest()
+
+
 def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
     """Load a registered dataset: a SlipstreamDataset (image datasets) or a VideoDataset (video datasets).
 
@@ -82,7 +100,7 @@ def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
 
     Image datasets (``load("imagenet1k", split="val")``):
         split: Dataset split (default "val").
-        fmt: Image format ("jpeg" or "yuv420"). Default "jpeg".
+        fmt: Image format ("jpeg" or "yuv420"; ImageNet val also "original" = the distributed JPEGs). Default "jpeg".
         **kwargs: Additional arguments passed to SlipstreamDataset.
 
     Video datasets (``load("spatialvid-hq", split="train", subset="person_carried_v0", rate_hz=15)``), see
@@ -100,6 +118,7 @@ def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
           decoded RGB output (the common decode path), or ``None`` if stats
           have not been computed yet. These are correct regardless of the
           storage ``fmt`` because every ``Decode*`` path emits RGB.
+        - ``.identity``: content hash of the store (see :func:`cache_identity`), for pinning evaluations.
         - ``.stats_by_colorspace``: per-colorspace stats, e.g. ``"rgb"`` and
           ``"yuv420"``. The ``"yuv420"`` entry is only correct for consumers
           that keep YUV planes (the niche ``DecodeYUV*`` decoders).
@@ -140,6 +159,7 @@ def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
         ensure_cache(remote_cache_path, local_cache_dir)
 
     dataset = SlipstreamDataset(local_dir=str(local_cache_dir), **kwargs)
+    dataset.identity = cache_identity(local_cache_dir)
 
     # Normalization stats depend on the DECODED colorspace (chosen by the
     # decoder/pipeline downstream), not the storage `fmt`. Every Decode* path

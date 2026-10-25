@@ -228,8 +228,8 @@ def test_status_table_and_paths(env, capsys):
     assert "source      SLIPSTREAM_CACHE_DIR environment variable" in out
     assert "identity    -  (remote checks skipped)" in out
     # present entry, missing entry, remote unchecked
-    assert "imagenet10        val    jpeg    ✓" in out
-    assert "imagenet10        train  jpeg    ✗ missing" in out
+    assert "imagenet10        val    jpeg      ✓" in out
+    assert "imagenet10        train  jpeg      ✗ missing" in out
     assert "to fetch:   visionlab-datasets sync imagenet10 val yuv420" in out  # first missing entry
     assert "registered but no remote caches yet: imagenette" in out
     assert "Local cache paths" in out
@@ -255,7 +255,7 @@ def test_status_remote_checks(env, capsys):
     assert "identity    ✓  arn:aws:iam::****:user/test" in out
     assert "read        ✓  s3://visionlab-datasets/slipstream-cache/" in out
     assert "✓  847.8 MB" in out  # 889_000_000 bytes
-    assert len(env.listed) == 16  # every registered (split, fmt)
+    assert len(env.listed) == 18  # every registered (split, fmt)
 
 
 def test_status_no_credentials_is_a_problem(env, capsys):
@@ -506,7 +506,7 @@ def test_status_reports_culled_dir_as_empty(env, capsys):
     rc = cli.main(["status", "--no-remote"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "imagenet10        val    jpeg    ✗ empty dir" in out
+    assert "imagenet10        val    jpeg      ✗ empty dir" in out
     assert "1 cache dir(s) exist without manifest.json" in out
 
 
@@ -547,7 +547,7 @@ def test_status_detects_inflight_download(env, capsys, monkeypatch):
     monkeypatch.setattr(OptimizedCache, "check_integrity", staticmethod(lambda p: (False, ["missing: image.bin"])))
     cli.main(["status", "--no-remote"])
     out = capsys.readouterr().out
-    assert "imagenet100       train  yuv420  ⚠ downloading" in out
+    assert "imagenet100       train  yuv420    ⚠ downloading" in out
     assert "download in progress: image.bin (2.0 KB so far)" in out
     assert "missing: image.bin" not in out
 

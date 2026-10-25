@@ -18,6 +18,7 @@ from .registry import (
     list_datasets,
     get_config,
     load,
+    cache_identity,
 )
 
 # Platform detection
