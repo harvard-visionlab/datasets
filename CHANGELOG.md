@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.19.1] - 2026-10-25
+
+### Changed
+- Dev pin slipstream v0.11.3 (single-item reads `ds[i]` on a prebuilt cache are serial: they no longer start numba's
+  parallel pool in the parent, which broke forked torch DataLoader workers, e.g. over `fmt="original"`); range
+  unchanged (`>=0.9,<0.12`). README install example updated to datasets v0.19.1.
+
 ## [0.19.0] - 2026-10-25
 
 ### Added
