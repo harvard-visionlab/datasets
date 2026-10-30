@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.12.0" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.19.2"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.20.0"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.19.2" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.20.0" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.12.0" }
 ```
 
@@ -156,6 +156,20 @@ pil_image = Image.open(io.BytesIO(sample['image']))
 dataset = load_dataset("imagenet-1k-train", decode_images=True)
 sample = dataset[0]
 pil_image = sample['image']  # Already decoded
+```
+
+### Store identity and sync (any slipstream store)
+
+```python
+from visionlab.datasets import cache_identity, sync_store
+
+# "sha256:..." over the manifest's sample count + per-file sha256; also ds.identity after load()
+cache_identity("/path/to/store")
+
+# Same lock/stage/verify/commit path as `visionlab-datasets sync`, for stores outside the registry
+# (e.g. visionlab.worlds rollouts). From S3, or from a local master copy with source_dir=.
+sync_store("s3://visionlab-datasets/<prefix>/<store>", "/n/netscratch/.../<store>")
+sync_store("s3://...", "/n/netscratch/.../<store>", source_dir="/n/lab_storage/.../<store>", deep=True)
 ```
 
 ---

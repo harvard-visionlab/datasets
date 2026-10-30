@@ -850,6 +850,51 @@ class _SyncFailed(Exception):
     pass
 
 
+def sync_store(
+    remote_prefix: str,
+    target: str | Path,
+    *,
+    source_dir: str | Path | None = None,
+    deep: bool = False,
+    force: bool = False,
+    break_lock: bool = False,
+    endpoint_url: str | None = None,
+    log: Callable[[str], None] = print,
+) -> SyncResult:
+    """Sync any slipstream store (not only registry caches) into ``target``: same lock/stage/verify/commit path
+    as ``visionlab-datasets sync``.
+
+    Source: the S3 prefix ``remote_prefix`` (``s3://bucket/path/to/store``), or with ``source_dir`` a local/NFS
+    copy of the same store (e.g. the lab_storage master); ``remote_prefix`` is then only used in messages.
+    Only files the store's manifest accounts for are synced (see :func:`cache_file_names`): keep side tables in the
+    store as fields, or next to it as their own store. ``deep`` re-hashes files already present (needs
+    ``file_sha256`` in the manifest). An existing copy of a different build is refused unless ``force``.
+
+    Returns the :class:`SyncResult` when ``ok``; raises ``RuntimeError`` otherwise (incl. another live sync
+    holding the lock).
+    """
+    from slipstream.cache import OptimizedCache  # type: ignore
+
+    target = Path(target).expanduser()
+    if source_dir is not None:
+        src = Path(source_dir).expanduser()
+        if not (src / MANIFEST_FILE).exists() or not OptimizedCache.check_integrity(src)[0]:
+            raise RuntimeError(f"source {src} is missing or incomplete")
+        files = list_local_files(src)
+        files, _ = split_listing(files, json.loads((src / MANIFEST_FILE).read_text()))
+    else:
+        src = None
+        files = list_remote_files(remote_prefix, endpoint_url=endpoint_url, profile=os.environ.get("AWS_PROFILE"))
+        if not files:
+            raise RuntimeError(f"No files at {remote_prefix}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    res = sync_cache(remote_prefix, target, remote_files=files, force=force, deep=deep, break_lock=break_lock,
+                     endpoint_url=endpoint_url, source_dir=src, log=log)
+    if not res.ok:
+        raise RuntimeError(f"Sync of {src or remote_prefix} -> {target} failed: " + "; ".join(res.problems[:5]))
+    return res
+
+
 def ensure_cache(
     remote: str,
     target: Path,

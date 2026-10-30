@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.20.0] - 2026-10-30
+
+### Added
+- `sync_store(remote_prefix, target, *, source_dir=None, deep=False, force=False, ...)` (public, exported with
+  `SyncResult`): the safe lock/stage/verify/commit sync for any slipstream store, not only registry caches (used by
+  visionlab.worlds rollouts). Raises `RuntimeError` on failure.
+
 ## [0.19.2] - 2026-10-30
 
 ### Changed

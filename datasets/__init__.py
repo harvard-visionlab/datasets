@@ -21,6 +21,9 @@ from .registry import (
     cache_identity,
 )
 
+# Safe sync of any slipstream store (S3 prefix or local master -> target)
+from .sync import sync_store, SyncResult
+
 # Platform detection
 from .runtime_platform import (
     Platform,

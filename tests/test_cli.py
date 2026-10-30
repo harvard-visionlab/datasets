@@ -976,3 +976,55 @@ def test_sync_keeps_locally_added_hashes_and_uses_them(env, capsys):
     assert "sha256 mismatch in cache: image.bin (will re-fetch)" in out
     assert (target / "image.bin").read_bytes() == b"i" * 3000
     assert json.loads((target / MANIFEST).read_text())["file_sha256"] == m["file_sha256"]  # kept
+
+
+# --------------------------------------------------------------------------- #
+# sync_store (public: any store, not only registry caches)
+# --------------------------------------------------------------------------- #
+
+
+def test_sync_store_from_s3_prefix(env, tmp_path):
+    from visionlab.datasets import sync_store
+
+    remote = "s3://visionlab-datasets/worlds-rollouts/atari-breakout/abc123/frames"
+    target = tmp_path / "rollouts" / "atari-breakout" / "abc123" / "frames"
+    res = sync_store(remote, target, log=lambda m: None)
+    assert res.ok and res.fetched_files == 3
+    assert sorted(p.name for p in target.iterdir()) == ["image.bin", "image.meta.npy", "label.npy", MANIFEST]
+    assert env.s3fake.listed == [remote]
+    # second run: nothing to fetch
+    assert sync_store(remote, target, log=lambda m: None).fetched_files == 0
+
+
+def test_sync_store_from_local_master(env, tmp_path):
+    from visionlab.datasets import sync_store
+
+    data = {"image.bin": b"i" * 30, "label.npy": b"l" * 5}
+    src = tmp_path / "master" / "store"
+    src.mkdir(parents=True)
+    for n, b in data.items():
+        (src / n).write_bytes(b)
+    (src / MANIFEST).write_bytes(fake_manifest(data))
+    (src / "stray.txt").write_text("not in the manifest")
+    target = tmp_path / "scratch" / "store"
+    res = sync_store("s3://unused", target, source_dir=src, log=lambda m: None)
+    assert res.ok and not env.s3fake.listed
+    assert sorted(p.name for p in target.iterdir()) == ["image.bin", "label.npy", MANIFEST]
+
+
+def test_sync_store_raises_on_missing_remote(env, tmp_path, monkeypatch):
+    from visionlab.datasets import sync_store
+
+    monkeypatch.setattr(cli.cache_sync, "list_remote_files", lambda *a, **k: {})
+    with pytest.raises(RuntimeError, match="No files at"):
+        sync_store("s3://visionlab-datasets/nothing", tmp_path / "x", log=lambda m: None)
+
+
+def test_sync_store_raises_on_corrupt_fetch(env, tmp_path):
+    from visionlab.datasets import sync_store
+
+    remote = "s3://visionlab-datasets/worlds-rollouts/x/frames"
+    data = {"image.bin": b"i" * 30}
+    env.s3fake.objects[remote] = {MANIFEST: fake_manifest(data, file_sha256={"image.bin": "0" * 64}), **data}
+    with pytest.raises(RuntimeError, match="verification"):
+        sync_store(remote, tmp_path / "frames", log=lambda m: None)
