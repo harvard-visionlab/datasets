@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.20.1] - 2026-10-30
+
+### Changed
+- slipstream range widened to `>=0.9,<0.14`, dev pin v0.13.0.
+- `cache_identity` re-exports `slipstream.identity.store_identity` (slipstream >= 0.13; same value), with the local
+  copy kept as fallback for older slipstream.
+
 ## [0.20.0] - 2026-10-30
 
 ### Added

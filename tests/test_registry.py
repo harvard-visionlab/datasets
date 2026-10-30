@@ -19,6 +19,22 @@ def test_cache_identity(tmp_path):
     assert cache_identity(tmp_path) is None
 
 
+def test_cache_identity_matches_slipstream_and_fallback(tmp_path):
+    import json
+
+    from visionlab.datasets import cache_identity
+    from visionlab.datasets.registry import _local_cache_identity
+
+    m = {"num_samples": 2, "file_sha256": {"a.bin": "11", "b.bin": "22"}}
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+    assert cache_identity(tmp_path) == _local_cache_identity(tmp_path)
+    try:
+        from slipstream.identity import store_identity
+    except ImportError:
+        return
+    assert store_identity(tmp_path) == _local_cache_identity(tmp_path)
+
+
 def test_imagenet_original_registered():
     from visionlab.datasets import get_config
 

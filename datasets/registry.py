@@ -73,12 +73,8 @@ def get_config(name: str) -> DatasetConfig:
     return REGISTRY[name]
 
 
-def cache_identity(cache_dir) -> "str | None":
-    """Content identity of a slipstream store: ``"sha256:<hex>"`` over its manifest's sample count and per-file sha256.
-
-    Changes if and only if a stored byte (or the sample count) changes; independent of manifest formatting, the
-    local path and the visionlab.datasets version. ``None`` when the manifest has no ``file_sha256``.
-    """
+def _local_cache_identity(cache_dir) -> "str | None":
+    """Fallback for slipstream < 0.13 (same definition as ``slipstream.identity.store_identity``)."""
     import hashlib
     import json
     from pathlib import Path
@@ -89,6 +85,20 @@ def cache_identity(cache_dir) -> "str | None":
     body = json.dumps({"num_samples": m["num_samples"], "file_sha256": m["file_sha256"]}, sort_keys=True,
                       separators=(",", ":"))
     return "sha256:" + hashlib.sha256(body.encode()).hexdigest()
+
+
+def cache_identity(cache_dir) -> "str | None":
+    """Content identity of a slipstream store: ``"sha256:<hex>"`` over its manifest's sample count and per-file sha256.
+
+    Changes if and only if a stored byte (or the sample count) changes; independent of manifest formatting, the
+    local path and the visionlab.datasets version. ``None`` when the manifest has no ``file_sha256``.
+    Re-exports ``slipstream.identity.store_identity`` (slipstream >= 0.13), with a local copy for older slipstream.
+    """
+    try:
+        from slipstream.identity import store_identity
+    except ImportError:
+        return _local_cache_identity(cache_dir)
+    return store_identity(cache_dir)
 
 
 def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
