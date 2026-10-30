@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.19.2] - 2026-10-30
+
+### Changed
+- slipstream range widened to `>=0.9,<0.13` and dev pin v0.12.0 (adds `SourceLoader`/`BatchSource` for live sources,
+  used by visionlab.worlds; cache path unchanged). README install example updated to datasets v0.19.2.
+
 ## [0.19.1] - 2026-10-25
 
 ### Changed
