@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [0.20.2] - 2026-11-03
+
+### Changed
+- slipstream range widened to `>=0.9,<0.15`, dev pin v0.14.0 (adds opt-in `crop_mode="ffcv"`; no API changes).
+
 ## [0.20.1] - 2026-10-30
 
 ### Changed
