@@ -37,12 +37,12 @@ PLATFORM_CACHE_DIRS = {
 
 
 def is_lightning_studio():
-    """Check if running inside Lightning Studio."""
-    try:
-        from litdata.constants import _IS_IN_STUDIO
-        return bool(_IS_IN_STUDIO)
-    except Exception:
-        return False
+    """Check if running inside Lightning Studio.
+
+    Same test as ``litdata.constants._IS_IN_STUDIO``, without importing litdata (which imports torch: seconds of
+    start-up on NFS, for every CLI call).
+    """
+    return bool(os.getenv("LIGHTNING_CLOUD_PROJECT_ID")) and bool(os.getenv("LIGHTNING_CLUSTER_ID"))
 
 
 def is_slurm_available():
@@ -76,7 +76,9 @@ def is_devcontainer():
 
 
 def is_gpu_available():
-    """Check if a CUDA GPU is available."""
+    """Check if a CUDA GPU is available (no NVIDIA driver tools -> False without importing torch)."""
+    if shutil.which("nvidia-smi") is None:
+        return False
     try:
         import torch
         return torch.cuda.is_available()
