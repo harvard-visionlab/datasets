@@ -6,7 +6,9 @@
     visionlab-datasets status --paths          # ... plus the full local path of every present cache
     visionlab-datasets status --no-remote      # offline: skip S3 checks
     visionlab-datasets list                    # registered datasets and their S3 caches
+    visionlab-datasets status imagenet1k       # ... only these datasets (faster)
     visionlab-datasets path imagenet100 val    # print local cache path(s) for a dataset
+    visionlab-datasets path imagenet1k train,val jpeg     # format positional or --fmt, as in sync
     visionlab-datasets sync imagenet100 train,val jpeg    # download caches
     visionlab-datasets sync imagenet1k val all            # both formats
     visionlab-datasets status --deep --json               # sha256 check, machine-readable
@@ -16,6 +18,8 @@ Also runnable as ``python -m visionlab.datasets``.
 Dataset names are the registry names (``imagenet10``, ``imagenet100``, ...);
 short aliases (``in10``, ``in100``, ``in1k``, ``in100_s292``) are accepted too.
 Splits and formats are comma-separated lists (``train,val``, ``jpeg,yuv420``) or ``all``.
+Formats: ``jpeg``, ``yuv420``, ``original`` (ImageNet val as distributed; ``all`` = jpeg,yuv420, so name it). ``path`` and ``sync`` both take
+the format as a positional argument or as ``--fmt``.
 
 Division of labour: **visionlab-datasets** owns the lab dataset registry
 (names, splits, formats, remote S3 caches, per-platform cache dir) and hence
@@ -62,7 +66,8 @@ ALIASES: dict[str, str] = {
 PRIMARY_ALIASES = ("in10", "in100", "in1k", "in100_s292")
 
 SPLITS = ("train", "val")
-FMTS = ("jpeg", "yuv420")
+FMTS = ("jpeg", "yuv420", "original")
+FMTS_ALL = ("jpeg", "yuv420")  # what `all` / the default means: training formats; `original` only when named
 
 OK, BAD, WARN, SKIP = "✓", "✗", "⚠", "-"
 
@@ -170,13 +175,15 @@ def resolve_name(name: str) -> str:
     )
 
 
-def parse_list(value: str | None, choices: tuple[str, ...], default: list[str]) -> list[str]:
-    """``'train,val'`` -> ``['train', 'val']``; ``'all'`` -> all choices; None -> default."""
+def parse_list(
+    value: str | None, choices: tuple[str, ...], default: list[str], all_: tuple[str, ...] | None = None
+) -> list[str]:
+    """``'train,val'`` -> ``['train', 'val']``; ``'all'`` -> ``all_`` (default: all choices); None -> default."""
     if value is None:
         return list(default)
     v = value.strip().lower()
     if v in ("", "all"):
-        return list(choices)
+        return list(all_ or choices)
     out: list[str] = []
     for item in v.split(","):
         item = item.strip()
@@ -189,6 +196,14 @@ def parse_list(value: str | None, choices: tuple[str, ...], default: list[str]) 
     return out
 
 
+
+
+def fmt_arg(args: argparse.Namespace) -> str | None:
+    """Format given positionally (``sync in1k val jpeg``) or as ``--fmt jpeg``; both accepted everywhere."""
+    pos, opt = getattr(args, "fmt_pos", None), getattr(args, "fmt", None)
+    if pos is not None and opt is not None and pos != opt:
+        raise SystemExit(f"Format given twice ({pos!r} and --fmt {opt!r}); give it once")
+    return pos if pos is not None else opt
 
 
 # --------------------------------------------------------------------------- #
@@ -428,13 +443,17 @@ def _remote_base(entries: list[DatasetEntry]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def collect_status(*, check_remote_access: bool = True, endpoint_url: str | None = None, deep: bool = False) -> dict:
+def collect_status(
+    *, check_remote_access: bool = True, endpoint_url: str | None = None, deep: bool = False,
+    names: list[str] | None = None,
+) -> dict:
+    """``names``: only these registry datasets (default all); other-cache scan is skipped when filtered."""
     scli = _slipstream_cli()
     import slipstream  # type: ignore
 
     cache = resolve_cache_dir()
     cache_base = Path(cache.path)
-    entries = registry_entries(cache_base)
+    entries = registry_entries(cache_base, names)
 
     s3 = scli.check_s3(_remote_base(entries), check_remote=check_remote_access, endpoint_url=endpoint_url)
 
@@ -451,8 +470,10 @@ def collect_status(*, check_remote_access: bool = True, endpoint_url: str | None
                 )
             )
 
-    others = [(n, b) for n, b in scli.find_other_caches(cache_base, {e.cache_name for e in entries})
-              if not n.endswith(cache_sync.PARTIAL_SUFFIX)]  # sync staging dirs are reported per cache
+    others = [] if names else [
+        (n, b) for n, b in scli.find_other_caches(cache_base, {e.cache_name for e in entries})
+        if not n.endswith(cache_sync.PARTIAL_SUFFIX)  # sync staging dirs are reported per cache
+    ]
     return {
         "visionlab_datasets_version": __version__,
         "slipstream_version": getattr(slipstream, "__version__", "?"),
@@ -670,7 +691,10 @@ def print_status(status: dict, *, paths: bool = False) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    status = collect_status(check_remote_access=not args.no_remote, endpoint_url=args.endpoint_url, deep=args.deep)
+    names = [resolve_name(n) for n in args.datasets] or None
+    status = collect_status(
+        check_remote_access=not args.no_remote, endpoint_url=args.endpoint_url, deep=args.deep, names=names
+    )
     if args.json:
         print(json.dumps(status, indent=2, default=str))
     else:
@@ -735,7 +759,7 @@ def cmd_path(args: argparse.Namespace) -> int:
 
     name = resolve_name(args.dataset)
     splits = parse_list(args.splits, SPLITS, list(SPLITS))
-    fmts = parse_list(args.fmt, FMTS, list(FMTS))
+    fmts = parse_list(fmt_arg(args), FMTS, list(FMTS_ALL), FMTS_ALL)
     cache_base = Path(resolve_cache_dir(args.dest).path)
     selected, _ = _select(name, splits, fmts, cache_base, default_note="defaults: all splits, all formats")
     for e in selected:
@@ -758,11 +782,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     name = resolve_name(args.dataset)
     splits = parse_list(args.splits, SPLITS, list(SPLITS))
-    fmts = parse_list(args.fmt, FMTS, list(FMTS))
+    fmt = fmt_arg(args)
+    if fmt is None:
+        raise SystemExit(f"Give a format: {' | '.join(FMTS)} | all  (e.g. sync {args.dataset} {args.splits} jpeg)")
+    fmts = parse_list(fmt, FMTS, list(FMTS_ALL), FMTS_ALL)
     cache = resolve_cache_dir(args.dest)
     cache_base = Path(cache.path)
     entries, skipped = _select(name, splits, fmts, cache_base, default_note="as requested")
-    for s, f in skipped:
+    explicit = fmt.strip().lower() != "all" and args.splits.strip().lower() != "all"
+    for s, f in skipped if explicit else []:
         _print(f"{WARN} {name}: no {s}/{f} cache registered, skipping")
 
     _print(f"Cache dir: {cache_base}  ({cache.source})")
@@ -934,7 +962,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  visionlab-datasets status\n"
             "  visionlab-datasets status --paths --no-remote\n"
             "  visionlab-datasets list\n"
+            "  visionlab-datasets status imagenet1k --paths\n"
             "  visionlab-datasets path imagenet100 val\n"
+            "  visionlab-datasets path imagenet1k train,val jpeg\n"
             "  visionlab-datasets sync imagenet100 train,val jpeg\n"
             "  visionlab-datasets sync imagenet1k val all --dry-run\n"
             "dataset aliases also accepted: "
@@ -954,6 +984,7 @@ def build_parser() -> argparse.ArgumentParser:
         "status", aliases=["config"],
         help="Cache dir + permissions, S3 access, per-dataset local/remote availability",
     )
+    sp.add_argument("datasets", nargs="*", help="Only these datasets (registry names or aliases; default: all)")
     sp.add_argument("--paths", action="store_true", help="Also list full local path of each present cache")
     sp.add_argument("--no-remote", action="store_true", help="Skip network checks (S3 identity/listing)")
     sp.add_argument("--endpoint-url", default=None, help="S3-compatible endpoint URL")
@@ -971,7 +1002,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("path", help="Print local cache path(s) for a dataset")
     sp.add_argument("dataset", help="Registry name (see `list`) or alias")
     sp.add_argument("splits", nargs="?", default=None, help="train | val | train,val | all (default: all)")
-    sp.add_argument("--fmt", default=None, help="jpeg | yuv420 | jpeg,yuv420 | all (default: all)")
+    sp.add_argument("fmt_pos", nargs="?", default=None, metavar="fmt",
+                    help="jpeg | yuv420 | original | jpeg,yuv420 | all (= jpeg,yuv420; default); or --fmt")
+    sp.add_argument("--fmt", default=None, help="Same as the positional fmt")
     sp.add_argument("--dest", default=None, help="Override cache dir")
     sp.add_argument("-q", "--quiet", action="store_true", help="Print bare paths only")
     sp.set_defaults(func=cmd_path)
@@ -980,7 +1013,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sync",
         help="Download dataset cache(s) from S3 into the cache dir",
         description=(
-            "usage: visionlab-datasets sync <dataset> <splits> <fmt>\n"
+            "usage: visionlab-datasets sync <dataset> <splits> <fmt>   (or --fmt <fmt>)\n"
             "examples:\n"
             "  visionlab-datasets sync imagenet100 train,val jpeg\n"
             "  visionlab-datasets sync imagenet100 val yuv420\n"
@@ -990,7 +1023,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("dataset", help="Registry name (see `list`) or alias")
     sp.add_argument("splits", help="train | val | train,val | all")
-    sp.add_argument("fmt", help="jpeg | yuv420 | jpeg,yuv420 | all")
+    sp.add_argument("fmt_pos", nargs="?", default=None, metavar="fmt",
+                    help="jpeg | yuv420 | original | jpeg,yuv420 | all (= jpeg,yuv420); or --fmt")
+    sp.add_argument("--fmt", default=None, help="Same as the positional fmt")
     sp.add_argument("--dest", default=None, help="Override cache dir (default: resolved cache dir)")
     sp.add_argument("--force", action="store_true", help="Re-download even if present and intact")
     sp.add_argument(

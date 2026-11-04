@@ -364,12 +364,41 @@ def test_sync_downloads_and_verifies(env, capsys):
 
 
 def test_sync_requires_splits_and_fmt(env, capsys):
-    for argv in (["sync", "imagenet10"], ["sync", "imagenet10", "val"]):
-        with pytest.raises(SystemExit) as ei:
-            cli.main(argv)
-        assert ei.value.code == 2
-    assert "required: splits, fmt" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["sync", "imagenet10"])
+    assert ei.value.code == 2
+    assert "required: splits" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["sync", "imagenet10", "val"])
+    assert "Give a format: jpeg | yuv420 | original | all" in str(ei.value)
     assert env.downloads == []
+
+
+def test_fmt_positional_or_flag(env, capsys):
+    """path and sync both take the format positionally or as --fmt (0.20.3)."""
+    for argv in (["path", "in1k", "val", "yuv420", "-q"], ["path", "in1k", "val", "--fmt", "yuv420", "-q"]):
+        assert cli.main(argv) == 0
+        assert capsys.readouterr().out.strip() == str(env.root / "imagenet1k-s256_l512-yuv420-val")
+    for argv in (["sync", "in10", "val", "jpeg", "--dry-run"], ["sync", "in10", "val", "--fmt", "jpeg", "--dry-run"]):
+        env.s3fake.listed.clear()
+        assert cli.main(argv) == 0
+        assert env.s3fake.listed == [IN10_VAL_REMOTE]
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["path", "in1k", "val", "jpeg", "--fmt", "yuv420"])
+    assert "Format given twice" in str(ei.value)
+
+
+def test_original_fmt(env, capsys):
+    assert cli.main(["path", "in1k", "val", "original", "-q"]) == 0
+    assert capsys.readouterr().out.strip() == str(env.root / "imagenet1k-original-val")
+
+
+def test_status_filters_datasets(env, capsys):
+    make_cache(env.root, "slipcache-deadbeef")
+    assert cli.main(["status", "in10", "--no-remote"]) == 0
+    out = capsys.readouterr().out
+    assert "imagenet10 " in out and "imagenet100 " not in out and "imagenet1k " not in out
+    assert "slipcache-deadbeef" not in out  # other-cache scan skipped when filtered
 
 
 def test_sync_accepts_alias(env):

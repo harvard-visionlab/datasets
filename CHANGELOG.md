@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [0.20.3] - 2026-11-04
+
+### Added
+- README "On the FAS cluster: quickstart": point `SLIPSTREAM_CACHE_DIR` at the shared netscratch cache, check it with
+  `path`, refill from the lab_storage master with `sync --source`; login-node rules.
+- Skill `skills/visionlab-datasets/SKILL.md` (also linked as `.claude/skills/visionlab-datasets`): where caches live,
+  the core commands, login-node rules. Canonical copy for lab skill collections.
+- `tests/test_docs.py`: every `visionlab-datasets` command in the README, the skill, the CLI docstring and the
+  parser examples must parse with the real CLI.
+- `status <dataset>...`: report only the named datasets (skips the other-cache scan).
+
+### Changed
+- `path` and `sync` both take the format positionally or as `--fmt` (before: `path` only `--fmt`, `sync` only
+  positional).
+- The CLI accepts the `original` format (ImageNet val originals); `all` still means `jpeg,yuv420`.
+- `import visionlab.datasets` no longer imports torch/torchvision: `ConvertToRGB` and `ResizeShortCropLong` load on
+  first access. CLI start-up drops from ~10-20 s (cold, cluster) to about a second.
+
 ## [0.20.2] - 2026-11-03
 
 ### Changed

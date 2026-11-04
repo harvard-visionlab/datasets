@@ -4,13 +4,13 @@ Visionlab dataset utilities for streaming datasets.
 
 ## Installation
 
-datasets requires `visionlab-slipstream>=0.9,<0.10` but doesn't pin a slipstream tag, and slipstream
+datasets requires `visionlab-slipstream>=0.9,<0.15` but doesn't pin a slipstream tag, and slipstream
 isn't on PyPI. **Pin slipstream yourself in the same install** (any tag in range); installing without
 it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.14.0" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.20.2"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.20.3"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.20.2" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.20.3" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.14.0" }
 ```
 
@@ -41,6 +41,32 @@ set `SLIPSTREAM_SKIP_EXT=1`. `slipstream status` shows whether the decoder built
 
 ## Usage
 
+### On the FAS cluster: quickstart
+
+The lab keeps every registered cache on the cluster, in a shared dir on netscratch. **Point your cache there; never
+stream or re-download from S3 for training** (S3 egress costs ~$56 per ImageNet-1k pass and is slow from the cluster).
+
+```bash
+# 1. Once: in ~/.bashrc (and in sbatch scripts, to be safe; jobs inherit it from the shell you submit from)
+export SLIPSTREAM_CACHE_DIR=/n/netscratch/alvarez_lab/Lab/datasets/slipstream
+
+# 2. Check (fast, offline, login node OK): one ✓ line per cache, under the dir above
+uv run --no-sync visionlab-datasets path imagenet1k train,val jpeg
+
+# 3. If a cache shows ✗ (netscratch purges files unused for ~90 days): refill from the lab_storage master,
+#    not S3. Run in a job (shared partition, 1-2 cores), not on the login node.
+uv run --no-sync visionlab-datasets sync imagenet1k train,val jpeg \
+    --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
+    --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream
+```
+
+Login node rules: `path`, `list`, and `status <dataset> --no-remote` are fine; `sync` and anything with `--deep`
+(sha256 of hundreds of GB) go in a job. Always `uv run --no-sync`: a plain `uv run` may install packages.
+
+If `uv run` hangs before printing anything, the login node's network-file locking is broken (uv locks its cache dir
+first; seen on holylogin05, 2026-11-04). Call the venv's binary directly instead
+(`$LAB_SCRATCH/venvs/<repo>/bin/visionlab-datasets ...`) or run in a job.
+
 ### Command line
 
 Check where the slipstream cache lives on this machine, which lab datasets are
@@ -51,12 +77,16 @@ S3 bucket:
 uv run visionlab-datasets status              # cache dir + permissions, S3 access, per-dataset table
 uv run visionlab-datasets status --paths      # ...plus full local path of every present cache
 uv run visionlab-datasets status --no-remote  # offline (skip S3 checks)
+uv run visionlab-datasets status imagenet1k --no-remote   # only some datasets (faster)
 uv run visionlab-datasets list                # registered datasets and their S3 caches
-uv run visionlab-datasets path imagenet100 val   # local cache path(s) for a dataset
+uv run visionlab-datasets path imagenet100 val   # local cache path(s) for a dataset (✓ present, ✗ missing)
+uv run visionlab-datasets path imagenet1k val original   # one format
 ```
 
 Download caches: `sync <dataset> <splits> <fmt>`, where splits/formats are
-comma lists or `all`:
+comma lists or `all`. Formats: `jpeg`, `yuv420`, `original` (ImageNet val as distributed; `all` means `jpeg,yuv420`, so name
+`original` explicitly). `path` and `sync`
+take the format either positionally or as `--fmt`:
 
 ```bash
 uv run visionlab-datasets sync imagenet100 train,val jpeg

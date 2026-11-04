@@ -32,15 +32,16 @@ from .runtime_platform import (
     configure_slipstream_cache,
 )
 
-# Preprocessing transforms
-from .transforms import ConvertToRGB, ResizeShortCropLong
-
 # Register all built-in dataset configs
 from . import _configs  # noqa: F401
 
 
 def __getattr__(name):
-    """Lazy import for backward compatibility with deprecated StreamingDataset."""
+    """Lazy imports: transforms pull in torchvision (slow cold start; the CLI never needs them),
+    StreamingDataset is deprecated."""
+    if name in ("ConvertToRGB", "ResizeShortCropLong"):
+        from . import transforms
+        return getattr(transforms, name)
     if name == "StreamingDataset":
         from .streaming_dataset import StreamingDatasetVisionlab
         return StreamingDatasetVisionlab
