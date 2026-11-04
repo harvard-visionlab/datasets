@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.20.4] - 2026-11-04
+
+### Changed
+- slipstream range widened to `>=0.9,<0.16`, dev pin v0.15.0 (additive: CollectParams, decoder crop-box
+  `last_params()`, RGBToLab; no cache-format, seed or cli-helper changes).
+
 ## [0.20.3] - 2026-11-04
 
 ### Added
