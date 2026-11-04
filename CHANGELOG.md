@@ -17,8 +17,9 @@ All notable changes to this project are documented here.
 - `path` and `sync` both take the format positionally or as `--fmt` (before: `path` only `--fmt`, `sync` only
   positional).
 - The CLI accepts the `original` format (ImageNet val originals); `all` still means `jpeg,yuv420`.
-- `import visionlab.datasets` no longer imports torch/torchvision: `ConvertToRGB` and `ResizeShortCropLong` load on
-  first access. CLI start-up drops from ~10-20 s (cold, cluster) to about a second.
+- CLI start-up no longer imports torch: `ConvertToRGB`/`ResizeShortCropLong` load on first access, and platform
+  detection checks Lightning Studio's env vars itself instead of importing litdata (and checks for `nvidia-smi` before
+  importing torch). `path` on a cluster login node: 9-14 s -> 1.1-1.8 s.
 
 ## [0.20.2] - 2026-11-03
 
