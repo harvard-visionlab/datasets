@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.20.5] - 2026-11-05
+
+### Changed
+- slipstream range widened to `>=0.9,<0.17`, dev pin v0.16.0 (opt-in `SlipstreamLoader(group=G)` paired
+  augmentation; crop decoders repeat the per-sample draw, not the pixel box, across `window`/`group`, which changes
+  nothing for same-size video frames; no cache-format or cli-helper changes).
+
 ## [0.20.4] - 2026-11-04
 
 ### Changed
