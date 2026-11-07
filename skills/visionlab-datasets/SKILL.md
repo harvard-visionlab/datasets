@@ -55,8 +55,10 @@ uv run --no-sync visionlab-datasets sync imagenet1k train,val jpeg \
 - OK: `path`, `list`, `status <dataset> --no-remote`.
 - In a job (`shared`, 1-2 cores; it waits on I/O): `sync`, anything with `--deep`, full `status` if it is slow.
 - Always `uv run --no-sync` (plain `uv run` may install). If `uv run` hangs before any output, the node's NFS
-  locking is broken (uv locks its cache dir first; holylogin05, 2026-11-04): call
-  `$LAB_SCRATCH/venvs/<repo>/bin/visionlab-datasets` directly or use a job.
+  locking is broken (uv locks its cache dir first; all login nodes 2026-11-04, fixed 2026-11-07; tell rchelp if it
+  recurs): call `$LAB_SCRATCH/venvs/<repo>/bin/visionlab-datasets` directly or use a job.
+- Don't wrap `uv` in `timeout`/`xargs`: that bypasses the lab's `uv` shell function (venv on netscratch) and creates
+  `.venv` in the holylabs checkout.
 
 ## Owner
 

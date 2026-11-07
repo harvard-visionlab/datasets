@@ -64,8 +64,10 @@ Login node rules: `path`, `list`, and `status <dataset> --no-remote` are fine; `
 (sha256 of hundreds of GB) go in a job. Always `uv run --no-sync`: a plain `uv run` may install packages.
 
 If `uv run` hangs before printing anything, the login node's network-file locking is broken (uv locks its cache dir
-first; seen on holylogin05, 2026-11-04). Call the venv's binary directly instead
-(`$LAB_SCRATCH/venvs/<repo>/bin/visionlab-datasets ...`) or run in a job.
+first; all login nodes 2026-11-04, fixed by FASRC 2026-11-07; report it to rchelp if it recurs). Meanwhile call the
+venv's binary directly (`$LAB_SCRATCH/venvs/<repo>/bin/visionlab-datasets ...`) or run in a job. Don't wrap `uv` in
+`timeout`/`xargs`/etc.: that runs the real binary, bypassing the lab's `uv` shell function, and puts a `.venv` in the
+holylabs checkout.
 
 ### Command line
 
