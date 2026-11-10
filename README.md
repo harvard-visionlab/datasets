@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.16.0" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.20.5"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.21.0"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.20.5" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.21.0" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.16.0" }
 ```
 
@@ -53,8 +53,9 @@ export SLIPSTREAM_CACHE_DIR=/n/netscratch/alvarez_lab/Lab/datasets/slipstream
 # 2. Check (fast, offline, login node OK): one ✓ line per cache, under the dir above
 uv run --no-sync visionlab-datasets path imagenet1k train,val jpeg
 
-# 3. If a cache shows ✗ (netscratch purges files unused for ~90 days): refill from the lab_storage master,
-#    not S3. Run in a job (shared partition, 1-2 cores), not on the login node.
+# 3. Nothing else: load() checks the cache on every call (a size check, milliseconds) and refills anything
+#    netscratch purged from the lab_storage master (free), using S3 only if the master lacks it.
+#    To refill ahead of time (e.g. before a big sweep), in a job (shared partition, 1-2 cores):
 uv run --no-sync visionlab-datasets sync imagenet1k train,val jpeg \
     --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
     --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream
@@ -146,10 +147,21 @@ Adding a dataset means adding a config under `datasets/_configs/`; it then appea
 Cache directory resolution: `SLIPSTREAM_CACHE_DIR` if set, else a per-platform default
 (`/n/lab_storage/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster, `~/.slipstream`
 on workstations/devboxes/devcontainers, `/tmp/slipstream_cache` on Lightning Studio).
-netscratch purges files that haven't been used for ~90 days, which leaves caches without
-`manifest.json` (`status` reports these as `empty dir`) or missing data files (`incomplete`).
-If you serve caches from netscratch, run `sync` before training (it re-fetches only what was
-purged), and `status --deep` to check contents.
+
+**Purges and refills (`load()`, since 0.21.0).** netscratch deletes files ~90 days after they were written, used or
+not, which leaves caches without `manifest.json` (`status`: `empty dir`) or missing data files (`incomplete`). A
+missing file is not silent (the first read raises `FileNotFoundError`), but it crashes the job after it got its GPUs.
+So every `load()` (image and video datasets) checks the cache first: every file the manifest lists, present at its
+size (milliseconds; a purge deletes whole files, so no hashing is needed). If anything is missing it refills only
+that, through the same lock/stage/verify path as `sync`:
+
+1. from the **master copy** when the machine has one: `VISIONLAB_DATASETS_MASTER` if set (empty = none), else
+   `/n/lab_storage/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster. Free. With a master, the check also
+   compares against the master's file list, which catches files the manifest doesn't list (`<field>_index.npy`);
+2. else from **S3**, with a printed line giving the file count, size and estimated egress cost.
+
+Several jobs or DDP ranks hitting the same purged cache refill it once; the others wait. `status --deep` still
+sha256-checks contents.
 
 ### Python
 

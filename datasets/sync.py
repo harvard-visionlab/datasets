@@ -56,6 +56,7 @@ INCOMPLETE_MARKER = "SYNC_INCOMPLETE.json"
 COMMANDS_FILE = ".s5cmd-commands.txt"
 AUTO_CONCURRENCY = 32  # FASRC -> S3, one 3.8 GB file: 16 parts 31.9 MB/s, 32 parts 46.0 MB/s
 AUTO_CONCURRENCY_MIN_MB = 256
+S3_EGRESS_USD_PER_GB = 0.085  # what S3 -> FASRC cost us (2026-11: $56 for 663 GB), before any Harvard waiver
 HEARTBEAT_S = 60
 STALE_S = 15 * 60
 _STAGING_JUNK = {INCOMPLETE_MARKER, COMMANDS_FILE}
@@ -895,28 +896,82 @@ def sync_store(
     return res
 
 
+def cache_intact(target: Path) -> bool:
+    """Manifest present and every file it lists present with the right size (slipstream's own check; milliseconds).
+
+    This is what catches a scratch purge: it deletes whole files, so a size check is enough (no hashing)."""
+    from slipstream.cache import OptimizedCache  # type: ignore
+
+    target = Path(target)
+    try:
+        return (target / MANIFEST_FILE).exists() and bool(OptimizedCache.check_integrity(target)[0])
+    except OSError:
+        return False
+
+
+def _master_listing(master: Path, target: Path) -> dict[str, int] | None:
+    """``{name: size}`` of an intact master copy usable as the source for ``target``, else None."""
+    try:
+        if master.resolve() == Path(target).resolve() or not cache_intact(master):
+            return None
+        files = list_local_files(master)
+        return split_listing(files, json.loads((master / MANIFEST_FILE).read_text()))[0]
+    except (OSError, ValueError):
+        return None
+
+
+def _missing_bytes(target: Path, files: dict[str, int]) -> tuple[int, int]:
+    todo = [n for n, sz in files.items() if n != MANIFEST_FILE and _size(Path(target) / n) != sz]
+    return len(todo), sum(files[n] for n in todo)
+
+
 def ensure_cache(
     remote: str,
     target: Path,
     *,
+    master: Path | str | None = None,
     endpoint_url: str | None = None,
     poll_s: float = 10.0,
     log: Callable[[str], None] = print,
 ) -> SyncResult:
-    """Sync ``remote`` -> ``target`` for ``load()``: same lock/stage/verify path as the CLI.
+    """Make ``target`` a complete cache for ``load()``; a no-op (milliseconds, no network) when it already is.
 
-    If another process is syncing the same cache (e.g. a teammate on the shared dir), wait for it
-    and use its result instead of downloading a second copy. Raises RuntimeError on failure.
+    Missing or partly purged (e.g. by netscratch's 90-day purge): refill only what is missing, from ``master`` (an
+    intact copy of the same cache, e.g. on lab_storage; free) when given, else from S3 ``remote`` (egress costs;
+    logged with size and estimate). Same lock/stage/verify path as the CLI. If another process is syncing the same
+    cache (a teammate, another DDP rank), wait for it and use its result instead of fetching a second copy.
+    Raises RuntimeError on failure.
     """
-    from slipstream.cache import OptimizedCache  # type: ignore
-
     target = Path(target)
+    src = Path(master).expanduser() if master else None
+    if cache_intact(target):
+        # The manifest doesn't list everything (e.g. slipstream's optional `<field>_index.npy`): with a master
+        # copy at hand, also compare against its file list (one directory listing).
+        master_files = _master_listing(src, target) if src is not None else None
+        if master_files is None or _missing_bytes(target, master_files)[0] == 0:
+            return SyncResult(ok=True, target=str(target))
+    state = "partly missing (purged?)" if target.exists() else "not present"
     waited = 0.0
     while True:
-        files = list_remote_files(remote, endpoint_url=endpoint_url, profile=os.environ.get("AWS_PROFILE"))
-        if not files:
-            raise RuntimeError(f"No files at {remote}")
-        res = sync_cache(remote, target, remote_files=files, endpoint_url=endpoint_url, log=log)
+        files = _master_listing(src, target) if src is not None else None
+        if files is not None:
+            n, need = _missing_bytes(target, files)
+            log(f"{target.name}: {state} in {target.parent}; copying {n} files ({need / 1e9:.2f} GB) from the "
+                f"master copy {src}")
+            res = sync_cache(remote, target, remote_files=files, source_dir=src, log=log)
+            if not res.ok and not res.lock_held:
+                log(f"  master copy failed ({'; '.join(res.problems[:2])}); falling back to S3")
+                src = None
+                continue
+        else:
+            files = list_remote_files(remote, endpoint_url=endpoint_url, profile=os.environ.get("AWS_PROFILE"))
+            if not files:
+                raise RuntimeError(f"No files at {remote}")
+            n, need = _missing_bytes(target, files)
+            why = f"no intact master copy at {src}" if src is not None else "no master copy configured"
+            log(f"{target.name}: {state} in {target.parent}; downloading {n} files ({need / 1e9:.2f} GB) from S3 "
+                f"{remote} (~${need / 1e9 * S3_EGRESS_USD_PER_GB:.2f} egress; {why})")
+            res = sync_cache(remote, target, remote_files=files, endpoint_url=endpoint_url, log=log)
         if res.ok:
             return res
         if not res.lock_held:
@@ -926,5 +981,5 @@ def ensure_cache(
         while lock_path(target).exists() and lock_stale_reason(read_lock(target), lock_path(target)) is None:
             time.sleep(poll_s)
             waited += poll_s
-        if (target / MANIFEST_FILE).exists() and OptimizedCache.check_integrity(target)[0]:
+        if cache_intact(target):
             return SyncResult(ok=True, target=str(target))

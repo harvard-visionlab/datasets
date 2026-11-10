@@ -29,6 +29,11 @@ export SLIPSTREAM_CACHE_DIR=/n/netscratch/alvarez_lab/Lab/datasets/slipstream
 
 A job that reads from S3 every epoch, or syncs into a per-job `/tmp`, means this variable is missing.
 
+Purges are handled by `load()` (since 0.21.0): each call size-checks the cache (milliseconds) and refills only what's
+missing, from the master copy (lab_storage on the cluster; `VISIONLAB_DATASETS_MASTER` overrides, empty = none),
+else from S3 with a printed size and cost estimate. A "downloading ... from S3" line on the cluster means the master
+lacks that cache.
+
 ## Commands
 
 ```bash

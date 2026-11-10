@@ -1057,3 +1057,115 @@ def test_sync_store_raises_on_corrupt_fetch(env, tmp_path):
     env.s3fake.objects[remote] = {MANIFEST: fake_manifest(data, file_sha256={"image.bin": "0" * 64}), **data}
     with pytest.raises(RuntimeError, match="verification"):
         sync_store(remote, tmp_path / "frames", log=lambda m: None)
+
+
+# --------------------------------------------------------------------------- #
+# load() path: ensure_cache with a master copy, purge repair (0.21.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_ensure_cache_intact_is_a_noop(env):
+    target = _synced(env)
+    env.s3fake.listed.clear()
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, log=lambda m: None)
+    assert res.ok and env.s3fake.listed == [] and env.downloads == []  # no network at all
+
+
+def test_ensure_cache_repairs_purge_from_s3_with_cost(env):
+    target = _synced(env)
+    (target / "image.bin").unlink()  # purged data file, manifest still there
+    logs: list[str] = []
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, log=logs.append)
+    assert res.ok and (target / "image.bin").exists()
+    assert [n for _, _, n in env.downloads] == [[MANIFEST], ["image.bin"]]  # only what was purged
+    msg = next(m for m in logs if "from S3" in m)
+    assert "partly missing" in msg and "1 files" in msg and "egress" in msg and "no master copy" in msg
+
+
+def test_ensure_cache_prefers_master(env, tmp_path_factory):
+    master = _make_source(tmp_path_factory.mktemp("lab"), env)
+    target = _synced(env)
+    (target / "image.bin").unlink()
+    (target / "label.npy").unlink()
+    env.s3fake.listed.clear()
+    logs: list[str] = []
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, master=master, log=logs.append)
+    assert res.ok and (target / "image.bin").read_bytes() == (master / "image.bin").read_bytes()
+    assert env.s3fake.listed == [] and env.downloads == []  # nothing from S3
+    assert any("from the master copy" in m and "2 files" in m for m in logs)
+
+
+def test_ensure_cache_falls_back_to_s3_when_master_incomplete(env, tmp_path_factory):
+    master = _make_source(tmp_path_factory.mktemp("lab"), env)
+    (master / "image.bin").unlink()  # master itself damaged
+    target = env.root / IN10_VAL
+    logs: list[str] = []
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, master=master, log=logs.append)
+    assert res.ok and env.downloads  # came from S3
+    assert any("no intact master copy" in m for m in logs)
+
+
+def test_ensure_cache_master_same_as_target_uses_s3(env):
+    target = env.root / IN10_VAL
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, master=target, log=lambda m: None)
+    assert res.ok and env.downloads
+
+
+def test_get_master_dir(monkeypatch, tmp_path):
+    from visionlab.datasets.runtime_platform import MASTER_DIR_ENV_VAR, Platform, get_master_dir
+
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, str(tmp_path))
+    assert get_master_dir() == str(tmp_path)
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, "")
+    assert get_master_dir() is None  # explicitly disabled
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, str(tmp_path / "nope"))
+    assert get_master_dir() is None  # not mounted here
+    monkeypatch.delenv(MASTER_DIR_ENV_VAR)
+    assert get_master_dir(Platform.CPU_WORKSTATION) is None
+
+
+def test_load_repairs_purged_image_cache_from_master(env, monkeypatch, tmp_path_factory):
+    from visionlab.datasets import registry
+    from visionlab.datasets.runtime_platform import MASTER_DIR_ENV_VAR
+
+    master = _make_source(tmp_path_factory.mktemp("lab"), env)
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, str(master.parent))
+    target = _synced(env)
+    (target / "image.bin").unlink()
+    seen = {}
+
+    class FakeDataset:
+        def __init__(self, local_dir, **kw):
+            seen["dir"] = local_dir
+
+    monkeypatch.setattr("slipstream.SlipstreamDataset", FakeDataset)
+    monkeypatch.setattr(registry, "cache_identity", lambda p: "sha256:x")
+    registry.load("imagenet10", split="val", fmt="jpeg")
+    assert seen["dir"] == str(target) and (target / "image.bin").exists()
+    assert env.downloads == []  # repaired from the master, not S3
+
+
+def test_resolve_store_repairs_partial_copy_from_master(env, monkeypatch, tmp_path_factory):
+    from visionlab.datasets import video_dataset as V
+    from visionlab.datasets.runtime_platform import MASTER_DIR_ENV_VAR
+
+    master = _make_source(tmp_path_factory.mktemp("lab"), env)
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, str(master.parent))
+    target = _synced(env)
+    (target / "label.npy").unlink()
+    assert V.resolve_store(IN10_VAL_REMOTE, "no-such-tree", env.root) == target
+    assert (target / "label.npy").exists() and env.downloads == []
+    # intact: returned as is; absent with download=False: None
+    assert V.resolve_store(IN10_VAL_REMOTE, "no-such-tree", env.root) == target
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, "")
+    assert V.resolve_store("s3://visionlab-datasets/x/other-store/", "no-such-tree", env.root, download=False) is None
+
+
+def test_ensure_cache_restores_unlisted_index_from_master(env, tmp_path_factory):
+    """`<field>_index.npy` isn't in the manifest; with a master copy its loss is still caught."""
+    master = _make_source(tmp_path_factory.mktemp("lab"), env)
+    (master / "label_index.npy").write_bytes(b"i" * 64)
+    target = _synced(env)
+    assert cli.cache_sync.cache_intact(target) and not (target / "label_index.npy").exists()
+    res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, master=master, log=lambda m: None)
+    assert res.ok and (target / "label_index.npy").read_bytes() == b"i" * 64

@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.21.0] - 2026-11-10
+
+### Changed
+- `load()` (image and video datasets) checks the local cache on every call: every file the manifest lists, present at
+  its size (`sync.cache_intact`; milliseconds). Before, it only checked that `manifest.json` existed, so a cache with
+  purged data files loaded and then crashed on the first read (`FileNotFoundError`).
+- Missing or partly purged caches are refilled (only what's missing) from the machine's **master copy** first, then
+  S3: `ensure_cache(remote, target, master=...)`. Master = `VISIONLAB_DATASETS_MASTER` (empty = none), else
+  `/n/lab_storage/alvarez_lab/Lab/datasets/slipstream` on the FAS cluster (`runtime_platform.get_master_dir`). With a
+  master, an intact-looking cache is also compared against the master's file list (catches unlisted
+  `<field>_index.npy`). A damaged master falls back to S3.
+- S3 refills print the file count, size and estimated egress cost (`sync.S3_EGRESS_USD_PER_GB`).
+- Video datasets: a partly purged store in the cache dir is repaired rather than bypassed; split/subset parquets are
+  also read from the master tree before S3.
+
 ## [0.20.5] - 2026-11-05
 
 ### Changed

@@ -111,14 +111,26 @@ def _s5cmd_cp(remote: str, local: Path) -> bool:
     return r.returncode == 0 and local.exists()
 
 
+def _master_root() -> Path | None:
+    from .runtime_platform import get_master_dir
+    m = get_master_dir()
+    return Path(m) if m else None
+
+
 def resolve_file(rel: str, remote: str, tree: str, cache_base: Path) -> Path:
-    """A small index file (split / subset parquet): shared tree if mounted, else download once into the cache dir."""
+    """A small index file (split / subset parquet): shared tree if mounted, else the cache dir, else the master copy
+    (read in place: a few MB), else download once from S3 into the cache dir."""
     for root in local_roots(tree):
         p = root / rel
         if p.exists():
             return p
     p = cache_base / tree / rel
-    if not p.exists() and not _s5cmd_cp(remote, p):
+    if p.exists():
+        return p
+    master = _master_root()
+    if master is not None and (master / tree / rel).exists():
+        return master / tree / rel
+    if not _s5cmd_cp(remote, p):
         raise FileNotFoundError(f"{rel} not found locally and could not be fetched from {remote}")
     return p
 
@@ -127,22 +139,25 @@ def resolve_store(remote: str, tree: str, cache_base: Path, download: bool = Tru
     """Store directory: shared tree if mounted, else `$SLIPSTREAM_CACHE_DIR/<store>` (downloaded from S3 when missing).
     Returns None when the store exists nowhere (not built / not synced yet)."""
     from slipstream.cache import MANIFEST_FILE
+    from .sync import cache_intact, ensure_cache
     name = store_name(remote)
     p = cache_base / name                      # a node-local copy beats the network share (CIFS drops page cache per process)
-    if (p / MANIFEST_FILE).exists():
+    if cache_intact(p):                        # every file present at its manifest size (milliseconds)
         return p
-    for root in local_roots(tree):
-        q = root / "stores" / name
-        if (q / MANIFEST_FILE).exists():
-            return q
+    if not p.exists():                         # a partly purged cache-dir copy is repaired below, not bypassed
+        for root in local_roots(tree):
+            q = root / "stores" / name
+            if (q / MANIFEST_FILE).exists():
+                return q
     if not download:
         return None
-    from slipstream.s3_sync import s3_path_exists
-    from .sync import ensure_cache
-    if not s3_path_exists(remote.rstrip("/") + "/" + MANIFEST_FILE):
-        return None
-    print(f"Downloading video store {name} from S3 ...")
-    ensure_cache(remote, p)            # lock/stage/verify, like `visionlab-datasets sync`
+    master = _master_root()
+    master_copy = master / name if master is not None and cache_intact(master / name) else None
+    if master_copy is None:
+        from slipstream.s3_sync import s3_path_exists
+        if not s3_path_exists(remote.rstrip("/") + "/" + MANIFEST_FILE):
+            return None
+    ensure_cache(remote, p, master=master_copy)   # refill what's missing (master first, else S3); lock/stage/verify
     return p
 
 

@@ -104,7 +104,8 @@ def cache_identity(cache_dir) -> "str | None":
 def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
     """Load a registered dataset: a SlipstreamDataset (image datasets) or a VideoDataset (video datasets).
 
-    Downloads the pre-built cache from S3 if not already present locally.
+    Checks the local cache is complete (every file present, right size) and refills what's missing: from the
+    master copy when the machine has one (lab_storage on the FAS cluster), else from S3.
     Automatically configures the slipstream cache directory based on the
     detected platform.
 
@@ -135,7 +136,6 @@ def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
     """
     from pathlib import Path
     from slipstream import SlipstreamDataset
-    from slipstream.cache import MANIFEST_FILE
 
     config = get_config(name)
     if config.is_video:
@@ -159,14 +159,13 @@ def load(name: str, split: str | None = None, fmt: str | None = None, **kwargs):
     cache_name = remote_cache_path.rstrip("/").rsplit("/", 1)[-1]
     local_cache_dir = Path(cache_base) / cache_name
 
-    # Download from S3 if not present locally
-    manifest = local_cache_dir / MANIFEST_FILE
-    if not manifest.exists():
-        # Same lock/stage/verify path as `visionlab-datasets sync`: safe on a shared cache dir,
-        # and re-fetches only what a scratch purge removed.
-        from .sync import ensure_cache
-        print(f"Downloading {name} ({split}, {fmt}) from S3...")
-        ensure_cache(remote_cache_path, local_cache_dir)
+    # Complete? (size check of every file, milliseconds.) If missing or partly purged, refill only what's gone:
+    # from the master copy (lab_storage on the cluster; free) when there is one, else S3. Same lock/stage/verify
+    # path as `visionlab-datasets sync`, safe on a shared cache dir.
+    from .runtime_platform import get_master_dir
+    from .sync import ensure_cache
+    master = get_master_dir()
+    ensure_cache(remote_cache_path, local_cache_dir, master=Path(master) / cache_name if master else None)
 
     dataset = SlipstreamDataset(local_dir=str(local_cache_dir), **kwargs)
     dataset.identity = cache_identity(local_cache_dir)

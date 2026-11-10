@@ -35,6 +35,29 @@ PLATFORM_CACHE_DIRS = {
     Platform.CPU_WORKSTATION: "~/.slipstream",
 }
 
+# Durable master copies of the caches (same layout as the cache dir: one dir per cache). When a cache in the cache dir
+# is missing or partly purged, load() refills it from here first (free), and only falls back to S3 (egress costs).
+# Override with VISIONLAB_DATASETS_MASTER (empty string = no master).
+MASTER_DIR_ENV_VAR = "VISIONLAB_DATASETS_MASTER"
+PLATFORM_MASTER_DIRS = {
+    Platform.FAS_CLUSTER: "/n/lab_storage/alvarez_lab/Lab/datasets/slipstream",
+}
+
+
+def get_master_dir(platform=None):
+    """Master cache dir for this machine (env override, else per-platform), or None if there is none here."""
+    override = os.environ.get(MASTER_DIR_ENV_VAR)
+    if override is not None:
+        path = override.strip()
+    else:
+        if platform is None:
+            platform = detect_platform()
+        path = PLATFORM_MASTER_DIRS.get(platform, "")
+    if not path:
+        return None
+    p = Path(path).expanduser()
+    return str(p) if p.is_dir() else None
+
 
 def is_lightning_studio():
     """Check if running inside Lightning Studio.
