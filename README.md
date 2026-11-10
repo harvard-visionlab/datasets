@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.16.0" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.21.1"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.22.0"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.21.1" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.22.0" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.16.0" }
 ```
 
@@ -64,6 +64,9 @@ uv run --no-sync visionlab-datasets check procthor-walks-objects train,val
 uv run --no-sync visionlab-datasets sync imagenet1k train,val jpeg \
     --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
     --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream
+uv run --no-sync visionlab-datasets sync procthor-walks-objects train,val,test \
+    --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
+    --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream
 ```
 
 Login node rules: `path`, `list`, and `status <dataset> --no-remote` are fine; `sync` and anything with `--deep`
@@ -94,13 +97,19 @@ uv run visionlab-datasets path imagenet1k val original   # one format
 Download caches: `sync <dataset> <splits> <fmt>`, where splits/formats are
 comma lists or `all`. Formats: `jpeg`, `yuv420`, `original` (ImageNet val as distributed; `all` means `jpeg,yuv420`, so name
 `original` explicitly). `path` and `sync`
-take the format either positionally or as `--fmt`:
+take the format either positionally or as `--fmt`.
+
+Video datasets (since 0.22.0): `sync` fetches the store(s) `load()` would use for those splits, picked as `load()`
+picks them: fmt optional (the dataset's default), `--res`, `--fps`, `--rate-hz`, `--split-version`. Splits that share
+a store sync it once; `all` = every part of the selected store. `--source`, `--dry-run`, `--deep` work as for images.
 
 ```bash
 uv run visionlab-datasets sync imagenet100 train,val jpeg
 uv run visionlab-datasets sync imagenet1k val all --dry-run
 uv run visionlab-datasets sync imagenet1k train jpeg --deep   # also sha256 what's present, re-fetch mismatches
 uv run visionlab-datasets status --deep --json                # sha256 check of present caches, machine-readable
+uv run visionlab-datasets sync procthor-walks-objects train,val,test --dry-run   # video: the stores load() uses
+uv run visionlab-datasets sync spatialvid-hq train --res 456x256 --fps 15 --dry-run
 # FAS cluster: copy from the lab_storage master instead of S3 (falls back to S3 per cache if the master copy is damaged)
 uv run visionlab-datasets sync imagenet1k train,val jpeg --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
     --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream

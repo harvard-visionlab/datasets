@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [0.22.0] - 2026-11-10
+
+### Added
+- `visionlab-datasets sync` handles video datasets: it syncs the store(s) `load()` would use for the given splits,
+  picked like `load()` (fmt optional; `--res`, `--fps`, `--rate-hz`, `--split-version`). Splits sharing a store
+  (procthor `rtq-r160` train/val) sync it once; `all` = every part of the selected store, no split table needed.
+  `--source` (lab_storage master), `--dry-run`, `--deep`, `--force` as for image caches.
+
+### Changed
+- `check`'s refill hint for video datasets is now a `visionlab-datasets sync ... --source <master>` command (was a
+  `python -c "load(...)"` one-liner).
+
 ## [0.21.1] - 2026-11-10
 
 ### Added

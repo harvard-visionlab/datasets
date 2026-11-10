@@ -1251,3 +1251,70 @@ def test_store_remotes_unpartitioned_needs_no_split_table(monkeypatch):
     monkeypatch.setattr(V, "resolve_file", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no split table")))
     r = V.store_remotes(get_config("spatialvid-hq"), split="train", res="456x256", rate_hz=15)
     assert r[0].endswith("spatialvid-hq-h265-456x256-15fps")
+
+
+# --------------------------------------------------------------------------- #
+# sync: video stores (0.22.0)
+# --------------------------------------------------------------------------- #
+
+PT = "s3://visionlab-datasets/slipstream-cache/procthor-walks-objects/procthor-walks-objects-h264-160x120-"
+
+
+def _pt_split_tables(root: Path) -> None:
+    import pandas as pd
+
+    d = root / "procthor-walks-objects" / "splits"
+    d.mkdir(parents=True)
+    rows = [(f"{part}/w{i}", s) for part, s in (("train", "train"), ("val", "val"), ("test", "test")) for i in range(2)]
+    pd.DataFrame(rows, columns=["clip_id", "split"]).to_parquet(d / "v1.parquet")
+    rtq = [("train/w0", "train"), ("train/w1", "val"), ("val/w0", "val_unseen"), ("test/w0", "test")]
+    pd.DataFrame(rtq, columns=["clip_id", "split"]).to_parquet(d / "rtq-r160.parquet")
+
+
+def test_sync_video_picks_the_stores_load_uses(env, capsys):
+    _pt_split_tables(env.root)
+    rc = cli.main(["sync", "procthor-walks-objects", "train,val,test", "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert sorted(env.s3fake.listed) == [PT + s + "/" for s in ("test", "train", "val")]
+    assert env.downloads == []
+
+
+def test_sync_video_splits_sharing_a_store_collapse(env, capsys):
+    _pt_split_tables(env.root)
+    assert cli.main(["sync", "procthor_walks_objects", "train,val", "--split-version", "rtq-r160", "--dry-run"]) == 0
+    assert env.s3fake.listed == [PT + "train/"]
+
+
+def test_sync_video_all_needs_no_split_table(env, capsys):
+    assert cli.main(["sync", "procthor-walks-objects", "all", "h264", "--dry-run"]) == 0
+    assert sorted(env.s3fake.listed) == [PT + s + "/" for s in ("test", "train", "val")]
+
+
+def test_sync_video_unpartitioned_store_with_res_fps(env, capsys):
+    assert cli.main(["sync", "spatialvid-hq", "train", "--res", "456x256", "--fps", "15", "--dry-run"]) == 0
+    (remote,) = env.s3fake.listed
+    assert remote.endswith("spatialvid-hq-h265-456x256-15fps/")
+
+
+def test_sync_video_from_master_and_check_hint(env, capsys, monkeypatch, tmp_path_factory):
+    from visionlab.datasets.runtime_platform import MASTER_DIR_ENV_VAR
+
+    _pt_split_tables(env.root)
+    master = tmp_path_factory.mktemp("lab") / "master"
+    src = master / "procthor-walks-objects-h264-160x120-val"
+    src.mkdir(parents=True)
+    for n, b in env.s3fake.remote(PT + "val/").items():
+        (src / n).write_bytes(b)
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, str(master))
+    assert cli.main(["--no-color", "check", "procthor-walks-objects", "val"]) == 1
+    hint = f"visionlab-datasets sync procthor-walks-objects val h264 --dest {env.root} --source {master}"
+    assert hint in capsys.readouterr().out
+    assert cli.main(hint.split()[1:]) == 0
+    assert env.downloads == [] and cli.cache_sync.cache_intact(env.root / src.name)
+    assert cli.main(["check", "procthor-walks-objects", "val"]) == 0
+
+
+def test_sync_image_rejects_video_flags(env):
+    with pytest.raises(SystemExit, match="video datasets"):
+        cli.main(["sync", "in10", "val", "jpeg", "--res", "256"])

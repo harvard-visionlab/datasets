@@ -12,6 +12,7 @@
     visionlab-datasets check imagenet1k train,val jpeg --min-days-left 3   # pre-flight: complete? days to purge?
     visionlab-datasets sync imagenet100 train,val jpeg    # download caches
     visionlab-datasets sync imagenet1k val all            # both formats
+    visionlab-datasets sync procthor-walks-objects train,val,test   # video: the stores load() uses
     visionlab-datasets status --deep --json               # sha256 check, machine-readable
 
 Also runnable as ``python -m visionlab.datasets``.
@@ -756,6 +757,51 @@ def _select(name: str, splits: list[str], fmts: list[str], cache_base: Path, *, 
     return selected, skipped
 
 
+def _video_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    """Video store selection flags (as load() takes them), only those given."""
+    fps = "native" if args.fps == "native" else (int(args.fps) if args.fps else None)
+    return {k: v for k, v in (("res", args.res), ("rate_hz", args.rate_hz), ("split_version", args.split_version),
+                              ("fps", fps)) if v is not None}
+
+
+def video_entries(name: str, splits: str | None, fmt: str | None, cache_base: Path, **video) -> list[DatasetEntry]:
+    """The store(s) load(name, split=..., **video) would use, one entry per store (splits sharing a store collapse).
+
+    ``splits``: comma list, or ``all`` = every part of the selected store (no split table needed)."""
+    from .video_dataset import _video_args, rank_stores, store_remotes
+
+    cfg = get_config(name)
+    if fmt is not None and "," in fmt:
+        raise SystemExit(f"{name} is a video dataset: give one fmt (or none for the dataset's default)")
+    if (splits or "").strip().lower() == "all":
+        _, _, f, res, rate_hz, fps, _ = _video_args(cfg, None, fmt, video.get("res"), video.get("rate_hz"),
+                                                    video.get("fps"), video.get("split_version"))
+        keys = rank_stores(cfg.stores, f, res, rate_hz, fps)
+        if not keys:
+            raise SystemExit(f"{name}: no store for fmt={f} res={res} rate_hz={rate_hz} fps={fps}")
+        store = cfg.stores[keys[0]]
+        pairs = list(store.items()) if isinstance(store, dict) else [("all", store)]
+        fmt = f
+    else:
+        pairs = []
+        for s in [x.strip() for x in (splits or "").split(",") if x.strip()] or [None]:
+            try:
+                pairs.append((s, store_remotes(cfg, split=s, fmt=fmt, cache_base=cache_base, **video)[0]))
+            except (KeyError, ValueError, FileNotFoundError, IndexError) as exc:
+                raise SystemExit(f"sync {name} split={s}: {exc}") from None
+        fmt = fmt or (cfg.metadata or {}).get("default_fmt", "h265")
+    out: dict[str, DatasetEntry] = {}
+    for s, remote in pairs:
+        cache_name = cache_name_for(remote)
+        if cache_name in out:
+            out[cache_name].split += f",{s}"
+            continue
+        out[cache_name] = DatasetEntry(dataset=name, split=s or (cfg.metadata or {}).get("default_split", "train"),
+                                       fmt=fmt, cache_name=cache_name, remote=remote.rstrip("/") + "/",
+                                       local_path=str(cache_base / cache_name))
+    return list(out.values())
+
+
 def cmd_path(args: argparse.Namespace) -> int:
     from slipstream.cache import MANIFEST_FILE  # type: ignore
 
@@ -792,9 +838,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if cfg.is_video:
         splits = [x.strip() for x in args.splits.split(",")] if args.splits else None
         fmts = [fmt] if fmt else None
-        video = {k: v for k, v in (("res", args.res), ("rate_hz", args.rate_hz), ("split_version", args.split_version),
-                                   ("fps", "native" if args.fps == "native" else (int(args.fps) if args.fps else None)))
-                 if v is not None}
+        video = _video_kwargs(args)
     else:
         splits = parse_list(args.splits, SPLITS, list(SPLITS))
         fmts = parse_list(fmt, FMTS, ["jpeg"], FMTS_ALL)
@@ -825,13 +869,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         _print(f"\n{len(bad)} cache(s) not complete. Refill in a CPU-only job (shared partition, 1-2 cores) "
                "before the GPU job:")
         for c in bad:
-            if cfg.is_video:
-                kw = "".join(f", {k}={v!r}" for k, v in video.items())
-                _print(f"  SLIPSTREAM_CACHE_DIR={cache_dir} python -c \"from visionlab.datasets import load; "
-                       f"load('{name}', split='{c.split}'{kw})\"   # refills {c.cache_name}")
-            else:
-                src = f" --source {Path(c.master).parent}" if c.master else ""
-                _print(f"  visionlab-datasets sync {name} {c.split} {c.fmt} --dest {cache_dir}{src}")
+            src = f" --source {Path(c.master).parent}" if c.master else ""
+            opts = "".join(f" --{k.replace('_', '-')} {v}" for k, v in video.items()) if cfg.is_video else ""
+            _print(f"  visionlab-datasets sync {name} {c.split} {c.fmt}{opts} --dest {cache_dir}{src}")
         if not any(c.master for c in bad):
             _print("  (no master copy here: this downloads from S3)")
         return 1
@@ -852,17 +892,22 @@ def cmd_sync(args: argparse.Namespace) -> int:
     _slipstream_cli()  # fail early with the upgrade hint if slipstream is too old
 
     name = resolve_name(args.dataset)
-    splits = parse_list(args.splits, SPLITS, list(SPLITS))
     fmt = fmt_arg(args)
-    if fmt is None:
-        raise SystemExit(f"Give a format: {' | '.join(FMTS)} | all  (e.g. sync {args.dataset} {args.splits} jpeg)")
-    fmts = parse_list(fmt, FMTS, list(FMTS_ALL), FMTS_ALL)
     cache = resolve_cache_dir(args.dest)
     cache_base = Path(cache.path)
-    entries, skipped = _select(name, splits, fmts, cache_base, default_note="as requested")
-    explicit = fmt.strip().lower() != "all" and args.splits.strip().lower() != "all"
-    for s, f in skipped if explicit else []:
-        _print(f"{WARN} {name}: no {s}/{f} cache registered, skipping")
+    if get_config(name).is_video:
+        entries = video_entries(name, args.splits, fmt, cache_base, **_video_kwargs(args))
+    else:
+        if any(v is not None for v in (args.res, args.fps, args.rate_hz, args.split_version)):
+            raise SystemExit(f"--res/--fps/--rate-hz/--split-version are for video datasets; {name} is an image dataset")
+        splits = parse_list(args.splits, SPLITS, list(SPLITS))
+        if fmt is None:
+            raise SystemExit(f"Give a format: {' | '.join(FMTS)} | all  (e.g. sync {args.dataset} {args.splits} jpeg)")
+        fmts = parse_list(fmt, FMTS, list(FMTS_ALL), FMTS_ALL)
+        entries, skipped = _select(name, splits, fmts, cache_base, default_note="as requested")
+        explicit = fmt.strip().lower() != "all" and args.splits.strip().lower() != "all"
+        for s, f in skipped if explicit else []:
+            _print(f"{WARN} {name}: no {s}/{f} cache registered, skipping")
 
     _print(f"Cache dir: {cache_base}  ({cache.source})")
     todo: list[DatasetEntry] = []
@@ -1115,21 +1160,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser(
         "sync",
-        help="Download dataset cache(s) from S3 into the cache dir",
+        help="Download dataset cache(s) / video store(s) from S3 (or --source) into the cache dir",
         description=(
             "usage: visionlab-datasets sync <dataset> <splits> <fmt>   (or --fmt <fmt>)\n"
+            "Video datasets: the store(s) load() would use for these splits; fmt optional; --res/--fps/--rate-hz/\n"
+            "--split-version pick the store like load(); splits 'all' = every part of that store.\n"
             "examples:\n"
             "  visionlab-datasets sync imagenet100 train,val jpeg\n"
             "  visionlab-datasets sync imagenet100 val yuv420\n"
             "  visionlab-datasets sync imagenet1k val all --dry-run\n"
+            "  visionlab-datasets sync procthor-walks-objects train,val,test --dry-run\n"
+            "  visionlab-datasets sync spatialvid-hq train --res 456x256 --fps 15 --dry-run\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sp.add_argument("dataset", help="Registry name (see `list`) or alias")
     sp.add_argument("splits", help="train | val | train,val | all")
     sp.add_argument("fmt_pos", nargs="?", default=None, metavar="fmt",
-                    help="jpeg | yuv420 | original | jpeg,yuv420 | all (= jpeg,yuv420); or --fmt")
+                    help="image: jpeg | yuv420 | original | jpeg,yuv420 | all (= jpeg,yuv420); video: optional "
+                    "(h264 | h265 ..., default the dataset's); or --fmt")
     sp.add_argument("--fmt", default=None, help="Same as the positional fmt")
+    sp.add_argument("--res", default=None, help="Video: store resolution (default: the dataset's)")
+    sp.add_argument("--fps", default=None, help="Video: store fps (15 | 30 | native)")
+    sp.add_argument("--rate-hz", type=float, default=None, help="Video: sampling rate (picks the store like load())")
+    sp.add_argument("--split-version", default=None, help="Video: split table version")
     sp.add_argument("--dest", default=None, help="Override cache dir (default: resolved cache dir)")
     sp.add_argument("--force", action="store_true", help="Re-download even if present and intact")
     sp.add_argument(

@@ -54,6 +54,10 @@ def test_documented_command_parses(where, command):
         cli.resolve_name(args.dataset)
     for name in getattr(args, "datasets", None) or []:
         cli.resolve_name(name)
+    from visionlab.datasets import get_config
+
+    if args.command == "sync" and get_config(cli.resolve_name(args.dataset)).is_video:
+        return  # video: splits/fmt resolved against the split table and stores (tests/test_cli.py)
     if args.command in ("path", "sync"):
         if args.splits is not None:
             cli.parse_list(args.splits, cli.SPLITS, list(cli.SPLITS))

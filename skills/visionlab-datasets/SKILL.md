@@ -37,7 +37,7 @@ lacks that cache.
 **Pre-flight before GPU jobs** (since 0.21.1): `visionlab-datasets check <dataset> [splits] [fmt]` (video: `--res`,
 `--fps`, `--rate-hz`) checks exactly the caches `load()` would use, with no network: complete, age, days until the
 netscratch purge (90 days after the files were written, read or not). Exit 0 ready / 1 missing (prints the refill
-command: run it as a CPU-only job and chain the GPU job with `--dependency=afterok`) / 2 a cache expires within
+command, a `sync` for images and video alike: run it as a CPU-only job and chain the GPU job with `--dependency=afterok`) / 2 a cache expires within
 `--min-days-left` (set it to the job length: files purged mid-run are not refilled until the next start). `--json`
 for scripts; Python: `visionlab.datasets.check.check(name, splits, fmts, ...)`.
 
@@ -53,12 +53,18 @@ uv run --no-sync visionlab-datasets list                                 # regis
 uv run --no-sync visionlab-datasets sync imagenet1k train,val jpeg \
     --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
     --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream
+uv run --no-sync visionlab-datasets sync procthor-walks-objects train,val,test \
+    --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
+    --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream
 ```
 
 - Arguments: `<dataset> <splits> <fmt>`. Splits: `train`, `val`, comma lists or `all`. Formats: `jpeg`, `yuv420`,
   `original` (ImageNet val as distributed; not in `all`, which means `jpeg,yuv420`), comma lists or `all`. The format
   goes positionally or as `--fmt` (since 0.20.3; older releases need `path ... --fmt jpeg` and `sync ... jpeg`).
   Aliases: `in10`, `in100`, `in1k`, `in100_s292`.
+- Video datasets (procthor-walks-*, spatialvid-hq; `sync` since 0.22.0): `sync`/`check` pick the store(s) `load()`
+  would use; fmt optional; `--res`, `--fps`, `--rate-hz`, `--split-version` as in `load()`; `all` = every part of
+  the store.
 - `sync` copies only missing or wrong-size files, is safe on shared dirs (lock, stage, verify, manifest last), and
   falls back to S3 per cache when the `--source` copy is damaged. `--deep` also sha256-checks what is present.
 - Python: `from visionlab.datasets import load, cache_identity, sync_store`.
