@@ -10,7 +10,7 @@ it fails to resolve.
 
 ```bash
 pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.16.0" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.21.0"
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.21.1"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,7 +19,7 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.21.0" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.21.1" }
 visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.16.0" }
 ```
 
@@ -53,9 +53,14 @@ export SLIPSTREAM_CACHE_DIR=/n/netscratch/alvarez_lab/Lab/datasets/slipstream
 # 2. Check (fast, offline, login node OK): one ✓ line per cache, under the dir above
 uv run --no-sync visionlab-datasets path imagenet1k train,val jpeg
 
-# 3. Nothing else: load() checks the cache on every call (a size check, milliseconds) and refills anything
-#    netscratch purged from the lab_storage master (free), using S3 only if the master lacks it.
-#    To refill ahead of time (e.g. before a big sweep), in a job (shared partition, 1-2 cores):
+# 3. Before submitting GPU jobs (login node OK, milliseconds, no network): complete? days until the purge?
+#    Exit 0 = ready, 1 = something missing (prints the refill command), 2 = expires within --min-days-left days.
+uv run --no-sync visionlab-datasets check imagenet1k train,val jpeg --min-days-left 3
+uv run --no-sync visionlab-datasets check procthor-walks-objects train,val
+
+# 4. If check says missing: refill in a CPU-only job (shared partition, 1-2 cores), and chain the GPU job after it
+#    (sbatch --dependency=afterok:<id>), so GPUs never wait on a copy. (load() would also refill, from the master
+#    first, but on GPU time.)
 uv run --no-sync visionlab-datasets sync imagenet1k train,val jpeg \
     --dest /n/netscratch/alvarez_lab/Lab/datasets/slipstream \
     --source /n/lab_storage/alvarez_lab/Lab/datasets/slipstream

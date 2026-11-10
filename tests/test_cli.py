@@ -31,6 +31,9 @@ MANIFEST = "manifest.json"
         ("in100-s292", "imagenet100_s292"),
         ("imagenet100_s292", "imagenet100_s292"),
         ("imagenet10", "imagenet10"),
+        ("procthor-walks-objects", "procthor-walks-objects"),
+        ("procthor_walks_empty", "procthor-walks-empty"),
+        ("SpatialVID-HQ", "spatialvid-hq"),
     ],
 )
 def test_resolve_name(given, expected):
@@ -1169,3 +1172,82 @@ def test_ensure_cache_restores_unlisted_index_from_master(env, tmp_path_factory)
     assert cli.cache_sync.cache_intact(target) and not (target / "label_index.npy").exists()
     res = cli.cache_sync.ensure_cache(IN10_VAL_REMOTE, target, master=master, log=lambda m: None)
     assert res.ok and (target / "label_index.npy").read_bytes() == b"i" * 64
+
+
+# --------------------------------------------------------------------------- #
+# check (pre-flight, 0.21.1)
+# --------------------------------------------------------------------------- #
+
+
+def _age(path: Path, days: float) -> None:
+    import os
+    import time
+
+    t = time.time() - days * 86400
+    for p in path.iterdir():
+        os.utime(p, (t, t))
+
+
+def test_check_complete_reports_age_and_days_left(env, capsys):
+    target = _synced(env)
+    _age(target, 30)
+    rc = cli.main(["--no-color", "check", "in10", "val", "jpeg", "--purge-days", "90"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "✓ imagenet10 val jpeg  complete  age 30 d, 60 d to purge" in out
+    assert "purged 90 days after last write" in out
+
+
+def test_check_missing_and_incomplete_exit_1_with_refill_hint(env, capsys, monkeypatch, tmp_path_factory):
+    from visionlab.datasets.runtime_platform import MASTER_DIR_ENV_VAR
+
+    master = _make_source(tmp_path_factory.mktemp("lab"), env)
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, str(master.parent))
+    target = _synced(env)
+    (target / "image.bin").unlink()
+    rc = cli.main(["--no-color", "check", "in10", "train,val", "jpeg"])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "✗ imagenet10 train jpeg  NOT PRESENT" in out
+    assert "✗ imagenet10 val jpeg  INCOMPLETE" in out and "image.bin" in out
+    assert f"visionlab-datasets sync imagenet10 val jpeg --dest {env.root} --source {master.parent}" in out
+    assert env.downloads == []  # check never fetches
+
+
+def test_check_expiring_exit_2(env, capsys):
+    target = _synced(env)
+    _age(target, 88)
+    assert cli.main(["--no-color", "check", "in10", "val", "jpeg", "--purge-days", "90", "--min-days-left", "3"]) == 2
+    assert "reach the purge age within 3 days" in capsys.readouterr().out
+    assert cli.main(["check", "in10", "val", "jpeg", "--purge-days", "90", "--min-days-left", "1"]) == 0
+
+
+def test_check_master_catches_unlisted_file_and_json(env, capsys, monkeypatch, tmp_path_factory):
+    from visionlab.datasets.runtime_platform import MASTER_DIR_ENV_VAR
+
+    master = _make_source(tmp_path_factory.mktemp("lab"), env)
+    (master / "label_index.npy").write_bytes(b"i" * 8)
+    monkeypatch.setenv(MASTER_DIR_ENV_VAR, str(master.parent))
+    _synced(env)
+    capsys.readouterr()  # drop the sync's own output
+    assert cli.main(["check", "in10", "val", "jpeg", "--json"]) == 1
+    rep = json.loads(capsys.readouterr().out)
+    (c,) = rep["checks"]
+    assert rep["ok"] is False and c["status"] == "incomplete" and c["master"] == str(master)
+    assert c["missing"] == ["label_index.npy (in the master, not here)"]
+
+
+def test_purge_days_for():
+    from visionlab.datasets.runtime_platform import purge_days_for
+
+    assert purge_days_for("/n/netscratch/alvarez_lab/Lab/datasets/slipstream") == 90
+    assert purge_days_for("/n/lab_storage/alvarez_lab/Lab/datasets/slipstream") is None
+
+
+def test_store_remotes_unpartitioned_needs_no_split_table(monkeypatch):
+    from visionlab.datasets import get_config
+    from visionlab.datasets import video_dataset as V
+
+    monkeypatch.setattr(V, "resolve_file", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no split table")))
+    r = V.store_remotes(get_config("spatialvid-hq"), split="train", res="456x256", rate_hz=15)
+    assert r[0].endswith("spatialvid-hq-h265-456x256-15fps")

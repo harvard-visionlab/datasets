@@ -403,15 +403,9 @@ def _store_scalars(store_dir: Path, names: tuple[str, ...]):
     return out
 
 
-def load_video(config, split: str | None = None, fmt: str | None = None, res: str | None = None, rate_hz: float | None = None,
-               fps: int | None = None, subset: str | None = None, split_version: str | None = None, where: str | None = None,
-               channel_cap: float | None = None, seed: int = 0, download: bool = True) -> VideoDataset:
-    import pandas as pd
-    from slipstream.cache import OptimizedCache
-    from .runtime_platform import configure_slipstream_cache
-
+def _video_args(config, split, fmt, res, rate_hz, fps, split_version):
+    """load()'s defaults for a video dataset: (tree, split, fmt, res, rate_hz, fps, split_version)."""
     meta = config.metadata or {}
-    tree = meta.get("tree", config.name)
     fmt = fmt or meta.get("default_fmt", "h265")
     res = meta.get("res_aliases", {}).get(str(res), res) if res else meta.get("default_res")
     split = split or meta.get("default_split", "train")
@@ -421,11 +415,41 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
     if rate_hz is None and fps is None and not native:
         rate_hz = meta.get("default_rate_hz")
     split_version = split_version or meta.get("default_split_version")
+    if split_version not in config.splits:
+        raise KeyError(f"unknown split version {split_version!r}; available: {sorted(config.splits)}")
+    return meta.get("tree", config.name), split, fmt, res, rate_hz, fps, split_version
+
+
+def store_remotes(config, split: str | None = None, fmt: str | None = None, res: str | None = None,
+                  rate_hz: float | None = None, fps: int | None = None, split_version: str | None = None,
+                  cache_base: Path | None = None) -> list[str]:
+    """S3 paths of the stores load() would consider for these arguments, best first (the first is the one it uses
+    whenever it is built). Reads the split table (cache dir, master, else a small S3 download)."""
+    import pandas as pd
+    from .runtime_platform import get_platform_cache_dir
+
+    tree, split, fmt, res, rate_hz, fps, split_version = _video_args(config, split, fmt, res, rate_hz, fps, split_version)
+    keys = rank_stores(config.stores, fmt, res, rate_hz, fps)
+    split_df = None
+    if any(isinstance(config.stores[k], dict) for k in keys):   # partitioned store: the split table says which part
+        cache_base = Path(cache_base or get_platform_cache_dir())
+        split_df = pd.read_parquet(resolve_file(f"splits/{split_version}.parquet", config.splits[split_version], tree,
+                                                cache_base))
+    return [store_part(config.stores[k], split_df, split) for k in keys]
+
+
+def load_video(config, split: str | None = None, fmt: str | None = None, res: str | None = None, rate_hz: float | None = None,
+               fps: int | None = None, subset: str | None = None, split_version: str | None = None, where: str | None = None,
+               channel_cap: float | None = None, seed: int = 0, download: bool = True) -> VideoDataset:
+    import pandas as pd
+    from slipstream.cache import OptimizedCache
+    from .runtime_platform import configure_slipstream_cache
+
+    meta = config.metadata or {}
+    tree, split, fmt, res, rate_hz, fps, split_version = _video_args(config, split, fmt, res, rate_hz, fps, split_version)
     cache_base = Path(configure_slipstream_cache())
 
     # split table first: a store may be partitioned by clip_id prefix (one store per source folder)
-    if split_version not in config.splits:
-        raise KeyError(f"unknown split version {split_version!r}; available: {sorted(config.splits)}")
     split_df = pd.read_parquet(resolve_file(f"splits/{split_version}.parquet", config.splits[split_version], tree, cache_base))
 
     # store

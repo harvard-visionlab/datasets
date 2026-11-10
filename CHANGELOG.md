@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.21.1] - 2026-11-10
+
+### Added
+- `visionlab-datasets check <dataset> [splits] [fmt]` (video: `--res`, `--fps`, `--rate-hz`, `--split-version`), and
+  `visionlab.datasets.check.check(...)`: pre-flight for launch scripts. Checks the caches `load()` would use without
+  network or downloads: complete (as `load()` checks: manifest sizes plus the master's file list), age of the oldest
+  file, days until the scratch purge (`runtime_platform.purge_days_for`: 90 on netscratch, purged by last write).
+  Exit 0 ready, 1 something missing (prints the refill command for a CPU-only job), 2 a cache reaches the purge age
+  within `--min-days-left`. `--json` for scripts.
+- `video_dataset.store_remotes(...)`: the stores `load()` would pick, without loading; the split table is read only
+  for stores partitioned by folder.
+
+### Fixed
+- Dataset names with dashes (`procthor-walks-objects`, `spatialvid-hq`) were rejected by the CLI name lookup.
+
 ## [0.21.0] - 2026-11-10
 
 ### Changed

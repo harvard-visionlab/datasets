@@ -43,6 +43,19 @@ PLATFORM_MASTER_DIRS = {
     Platform.FAS_CLUSTER: "/n/lab_storage/alvarez_lab/Lab/datasets/slipstream",
 }
 
+# Filesystems that delete files a fixed number of days after they were last written (FASRC netscratch: by mtime,
+# whether or not the files were read since; touching files to dodge it is not allowed).
+PURGE_DAYS_BY_ROOT = {"/n/netscratch/": 90}
+
+
+def purge_days_for(path):
+    """Days after which ``path``'s filesystem purges files, or None if it doesn't."""
+    p = str(Path(path).expanduser())
+    for root, days in PURGE_DAYS_BY_ROOT.items():
+        if p.startswith(root):
+            return days
+    return None
+
 
 def get_master_dir(platform=None):
     """Master cache dir for this machine (env override, else per-platform), or None if there is none here."""

@@ -34,9 +34,17 @@ missing, from the master copy (lab_storage on the cluster; `VISIONLAB_DATASETS_M
 else from S3 with a printed size and cost estimate. A "downloading ... from S3" line on the cluster means the master
 lacks that cache.
 
+**Pre-flight before GPU jobs** (since 0.21.1): `visionlab-datasets check <dataset> [splits] [fmt]` (video: `--res`,
+`--fps`, `--rate-hz`) checks exactly the caches `load()` would use, with no network: complete, age, days until the
+netscratch purge (90 days after the files were written, read or not). Exit 0 ready / 1 missing (prints the refill
+command: run it as a CPU-only job and chain the GPU job with `--dependency=afterok`) / 2 a cache expires within
+`--min-days-left` (set it to the job length: files purged mid-run are not refilled until the next start). `--json`
+for scripts; Python: `visionlab.datasets.check.check(name, splits, fmts, ...)`.
+
 ## Commands
 
 ```bash
+uv run --no-sync visionlab-datasets check imagenet1k train,val jpeg --min-days-left 3   # pre-flight (below)
 uv run --no-sync visionlab-datasets path imagenet1k train,val jpeg       # ✓/✗ per cache + its path (fast, offline)
 uv run --no-sync visionlab-datasets status imagenet1k --no-remote        # fuller report for one dataset
 uv run --no-sync visionlab-datasets status                               # every dataset + S3 checks (slow-ish)

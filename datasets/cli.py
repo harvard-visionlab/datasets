@@ -9,6 +9,7 @@
     visionlab-datasets status imagenet1k       # ... only these datasets (faster)
     visionlab-datasets path imagenet100 val    # print local cache path(s) for a dataset
     visionlab-datasets path imagenet1k train,val jpeg     # format positional or --fmt, as in sync
+    visionlab-datasets check imagenet1k train,val jpeg --min-days-left 3   # pre-flight: complete? days to purge?
     visionlab-datasets sync imagenet100 train,val jpeg    # download caches
     visionlab-datasets sync imagenet1k val all            # both formats
     visionlab-datasets status --deep --json               # sha256 check, machine-readable
@@ -163,8 +164,9 @@ def resolve_name(name: str) -> str:
     """Map an alias or registry name (case/dash-insensitive) to a registry name."""
     key = name.strip().lower().replace("-", "_")
     known = set(list_datasets())
-    if key in known:
-        return key
+    by_key = {k.replace("-", "_"): k for k in known}   # registry names use either (imagenet100_s292, procthor-walks-objects)
+    if key in by_key:
+        return by_key[key]
     if key in ALIASES and ALIASES[key] in known:
         return ALIASES[key]
     aliases = ", ".join(f"{a}={d}" for a, d in ALIASES.items() if d in known)
@@ -773,6 +775,75 @@ def cmd_path(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# check (pre-flight)
+# --------------------------------------------------------------------------- #
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    from .check import as_dicts, check
+    from .registry import get_config
+    from .runtime_platform import get_master_dir, purge_days_for
+
+    name = resolve_name(args.dataset)
+    cfg = get_config(name)
+    fmt = fmt_arg(args)
+    cache_dir = Path(resolve_cache_dir(args.dest).path)
+    master = get_master_dir()
+    if cfg.is_video:
+        splits = [x.strip() for x in args.splits.split(",")] if args.splits else None
+        fmts = [fmt] if fmt else None
+        video = {k: v for k, v in (("res", args.res), ("rate_hz", args.rate_hz), ("split_version", args.split_version),
+                                   ("fps", "native" if args.fps == "native" else (int(args.fps) if args.fps else None)))
+                 if v is not None}
+    else:
+        splits = parse_list(args.splits, SPLITS, list(SPLITS))
+        fmts = parse_list(fmt, FMTS, ["jpeg"], FMTS_ALL)
+        video = {}
+    try:
+        checks = check(name, splits, fmts, cache_dir=cache_dir, master_dir=master, purge_days=args.purge_days, **video)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        raise SystemExit(f"check {name}: {exc}") from None
+    bad = [c for c in checks if not c.ok]
+    expiring = [c for c in checks if c.ok and c.days_left is not None and c.days_left < args.min_days_left]
+    if args.json:
+        print(json.dumps({"cache_dir": str(cache_dir), "master": master, "checks": as_dicts(checks),
+                          "ok": not bad and not expiring}, indent=2))
+        return 1 if bad else (2 if expiring else 0)
+    purge = args.purge_days if args.purge_days is not None else purge_days_for(cache_dir)
+    _print(f"Cache dir: {cache_dir}  ({f'purged {purge} days after last write' if purge else 'not purged'}); "
+           f"master: {master or 'none'}")
+    for c in checks:
+        age = "" if c.age_days is None else f"age {c.age_days:.0f} d"
+        if c.days_left is not None:
+            age += f", {c.days_left:.0f} d to purge"
+        mark = BAD if not c.ok else (WARN if c in expiring else OK)
+        what = {"ok": "complete", "incomplete": "INCOMPLETE", "empty": "EMPTY (purged)", "missing": "NOT PRESENT"}[c.status]
+        _print(f"{mark} {c.dataset} {c.split} {c.fmt}  {what}  {age}".rstrip() + f"  {c.path}")
+        for m in c.missing[:5]:
+            _print(f"    {m}")
+    if bad:
+        _print(f"\n{len(bad)} cache(s) not complete. Refill in a CPU-only job (shared partition, 1-2 cores) "
+               "before the GPU job:")
+        for c in bad:
+            if cfg.is_video:
+                kw = "".join(f", {k}={v!r}" for k, v in video.items())
+                _print(f"  SLIPSTREAM_CACHE_DIR={cache_dir} python -c \"from visionlab.datasets import load; "
+                       f"load('{name}', split='{c.split}'{kw})\"   # refills {c.cache_name}")
+            else:
+                src = f" --source {Path(c.master).parent}" if c.master else ""
+                _print(f"  visionlab-datasets sync {name} {c.split} {c.fmt} --dest {cache_dir}{src}")
+        if not any(c.master for c in bad):
+            _print("  (no master copy here: this downloads from S3)")
+        return 1
+    if expiring:
+        _print(f"\n{WARN} {len(expiring)} cache(s) reach the purge age within {args.min_days_left:g} days: files may "
+               "disappear mid-run. load() refills them at the next start, but not during a run.")
+        return 2
+    _print(f"\n{OK} all {len(checks)} cache(s) complete.")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # sync
 # --------------------------------------------------------------------------- #
 
@@ -965,6 +1036,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  visionlab-datasets status imagenet1k --paths\n"
             "  visionlab-datasets path imagenet100 val\n"
             "  visionlab-datasets path imagenet1k train,val jpeg\n"
+            "  visionlab-datasets check imagenet1k train,val jpeg --min-days-left 3\n"
             "  visionlab-datasets sync imagenet100 train,val jpeg\n"
             "  visionlab-datasets sync imagenet1k val all --dry-run\n"
             "dataset aliases also accepted: "
@@ -1008,6 +1080,38 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dest", default=None, help="Override cache dir")
     sp.add_argument("-q", "--quiet", action="store_true", help="Print bare paths only")
     sp.set_defaults(func=cmd_path)
+
+    sp = sub.add_parser(
+        "check",
+        help="Pre-flight: are the caches complete, how old, how long until a scratch purge (exit 1/2 if not)",
+        description=(
+            "Checks the caches load() would use, without network: every file present at its manifest size (and the\n"
+            "master copy's file list), age of the oldest file, days until the scratch purge. Exit 0 = all complete;\n"
+            "1 = something missing (prints the refill command for a CPU-only job); 2 = complete, but a cache reaches\n"
+            "the purge age within --min-days-left days.\n"
+            "examples:\n"
+            "  visionlab-datasets check imagenet1k train,val jpeg --min-days-left 3\n"
+            "  visionlab-datasets check procthor-walks-objects train,val\n"
+            "  visionlab-datasets check spatialvid-hq train --res 456x256 --rate-hz 15 --json\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp.add_argument("dataset", help="Registry name (see `list`) or alias")
+    sp.add_argument("splits", nargs="?", default=None,
+                    help="train | val | train,val | all (image default: all; video default: the dataset's)")
+    sp.add_argument("fmt_pos", nargs="?", default=None, metavar="fmt",
+                    help="image: jpeg | yuv420 | original | jpeg,yuv420 | all (default jpeg); or --fmt")
+    sp.add_argument("--fmt", default=None, help="Same as the positional fmt")
+    sp.add_argument("--res", default=None, help="Video: store resolution (default: the dataset's)")
+    sp.add_argument("--fps", default=None, help="Video: store fps (15 | 30 | native)")
+    sp.add_argument("--rate-hz", type=float, default=None, help="Video: sampling rate (picks the store like load())")
+    sp.add_argument("--split-version", default=None, help="Video: split table version")
+    sp.add_argument("--min-days-left", type=float, default=0,
+                    help="Exit 2 if a complete cache reaches the purge age within this many days (e.g. the job length)")
+    sp.add_argument("--purge-days", type=int, default=None, help="Override the purge age (default: 90 on netscratch)")
+    sp.add_argument("--dest", default=None, help="Override cache dir")
+    sp.add_argument("--json", action="store_true", help="Machine-readable output")
+    sp.set_defaults(func=cmd_check)
 
     sp = sub.add_parser(
         "sync",
