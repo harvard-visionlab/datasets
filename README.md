@@ -4,13 +4,13 @@ Visionlab dataset utilities for streaming datasets.
 
 ## Installation
 
-datasets requires `visionlab-slipstream>=0.9,<0.17` but doesn't pin a slipstream tag, and slipstream
+datasets requires `visionlab-slipstream>=0.9,<0.18` but doesn't pin a slipstream tag, and slipstream
 isn't on PyPI. **Pin slipstream yourself in the same install** (any tag in range); installing without
 it fails to resolve.
 
 ```bash
-pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.16.0" \
-            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.22.0"
+pip install "visionlab-slipstream @ git+https://github.com/harvard-visionlab/slipstream.git@v0.17.0" \
+            "visionlab-datasets @ git+https://github.com/harvard-visionlab/datasets.git@v0.22.1"
 ```
 
 Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
@@ -19,8 +19,8 @@ Or with [uv](https://github.com/astral-sh/uv), in a project's `pyproject.toml`:
 dependencies = ["visionlab-datasets", "visionlab-slipstream"]
 
 [tool.uv.sources]
-visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.22.0" }
-visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.16.0" }
+visionlab-datasets = { git = "https://github.com/harvard-visionlab/datasets.git", tag = "v0.22.1" }
+visionlab-slipstream = { git = "https://github.com/harvard-visionlab/slipstream.git", tag = "v0.17.0" }
 ```
 
 uv applies a git dependency's own `[tool.uv.sources]`, so datasets' torch/torchvision sources (the

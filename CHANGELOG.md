@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.22.1] - 2026-11-10
+
+### Changed
+- slipstream range widened to `>=0.9,<0.18`, dev pin v0.17.0. 0.17.0: `DecodeVideoWindow(transforms=...)` now needs
+  `aug_mode="clip"` (one draw per window, the old behaviour) or `"frame"` (per-frame draws); datasets never passes
+  `transforms`, so nothing changes here. Also cyclic DDP padding for splits smaller than half the GPU count (same
+  output for real dataset sizes). No cache-format or cli-helper changes.
+
 ## [0.22.0] - 2026-11-10
 
 ### Added
