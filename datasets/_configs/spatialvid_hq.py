@@ -16,6 +16,13 @@ from ..registry import DatasetConfig, register
 
 S3 = "s3://visionlab-datasets/slipstream-cache/spatialvid-hq"
 
+_EGO = {
+    "person_carried_v0": {"rate_hz": 15, "mean": (-3.30169e-05, -3.14994e-05, 0.00749829, -8.14747e-07, 6.6549e-05, 1.14942e-05),
+                          "std": (0.00406336, 0.00164502, 0.00704761, 0.00187087, 0.00708602, 0.00119285)},
+    "person_walking_v0": {"rate_hz": 15, "mean": (-3.07235e-05, -3.88232e-05, 0.00891854, 3.1888e-06, 9.06934e-05, 1.20771e-05),
+                          "std": (0.00435559, 0.00175941, 0.00680596, 0.00171853, 0.00661057, 0.00103231)},
+}
+
 register(DatasetConfig(
     name="spatialvid-hq",
     num_classes=0,
@@ -54,6 +61,13 @@ register(DatasetConfig(
             "spatialvid-hq-h265-640x360":       {"mean": (0.434176, 0.425239, 0.404285), "std": (0.231950, 0.229325, 0.251976)},
             "spatialvid-hq-h265-640x360-30fps": {"mean": (0.432961, 0.424706, 0.404042), "std": (0.231258, 0.228758, 0.250860)},
             "spatialvid-hq-h265-640x360-15fps": {"mean": (0.432552, 0.426263, 0.406928), "std": (0.232041, 0.229050, 0.251962)},
+            # Ego-motion z-score stats (prep/spatialvid_hq/ego_stats.py, 2026-11-16): `ds.ego_motion_at` deltas
+            # [dx dy dz rx ry rz] (camera-t axes; translation in raw MegaSaM pose units, ~8 m per unit at walking pace,
+            # no per-clip rescale; rotation in rad) between consecutive frames at 15 Hz, over 4 epochs of seeded 61-frame
+            # train windows. Deltas scale with the frame interval: valid at rate_hz=15 only. `ds.ego_stats` picks the
+            # entry for the loaded subset. Source JSON: <tree>/index/ego_stats_<subset>.json.
+            "egomotion": _EGO["person_carried_v0"],
+            "egomotion_subsets": _EGO,
         },
     },
 ))

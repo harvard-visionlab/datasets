@@ -224,6 +224,7 @@ class VideoDataset:
     subset: str | None
     rate_hz: float | None
     stats: dict | None = None
+    ego_stats: dict | None = None       # z-score stats of ego_motion_at deltas for this subset ({rate_hz, mean, std}), if any
     _annot_cache: dict = field(default_factory=dict, repr=False)
 
     # --- basics
@@ -481,5 +482,12 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
             raise KeyError(f"unknown subset {subset!r}; available: {sorted(config.subsets)}")
         subset_df = pd.read_parquet(resolve_file(f"subsets/{subset}.parquet", config.subsets[subset], tree, cache_base))
     clips = select_clips(records, split_df, split, subset_df, where, channel_cap, seed)
-    stats = (meta.get("stats") or {}).get(store_name(remote)) or (meta.get("stats") or {}).get("rgb")
-    return VideoDataset(config.name, key, store_dir, cache, clips, split, subset, rate_hz, stats)
+    all_stats = meta.get("stats") or {}
+    stats = all_stats.get(store_name(remote)) or all_stats.get("rgb")
+    # only per-subset entries in the ego_motion_at convention (procthor's "egomotion" is the student's 3-D one)
+    ego = (all_stats.get("egomotion_subsets") or {}).get(subset)
+    if ego and ego.get("rate_hz") and rate_hz and float(rate_hz) != float(ego["rate_hz"]):
+        warnings.warn(f"{config.name}: egomotion stats were computed at {ego['rate_hz']} Hz; ego deltas at rate_hz={rate_hz} "
+                      "differ in scale, so ds.ego_stats is None", stacklevel=3)
+        ego = None
+    return VideoDataset(config.name, key, store_dir, cache, clips, split, subset, rate_hz, stats, ego)

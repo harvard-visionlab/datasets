@@ -128,8 +128,13 @@ a rotation vector in radians). See Usage.
   up close. Channels are heavy-tailed: in the person-walking subset the top channel is 15 % of clips and the top
   ten are about half. Use `channel_cap=` (below) if that matters for you, and always report test (unseen channels).
 - **Pose accuracy: good but unverified per clip.** Poses come from a structure-from-motion pipeline (MegaSaM) run by
-  the authors. They are smooth and consistent within a clip in every clip we inspected, but scale is arbitrary per
-  clip and there is no ground truth. Compare motion _within_ a clip, or normalise. The demo notebook
+  the authors. They are smooth and consistent within a clip in every clip we inspected. Translation is **not in
+  metres**: at walking pace one pose unit is roughly 8 m (median clip 0.137 units/s; clips that walk straight ahead
+  0.164). Between clips the scale is only loosely consistent, but consistent enough that clip speeds rank
+  correctly: a by-eye check of slow, middle and fast clips (2026-11-16) agreed with the measured order. So use one
+  global scale (z-score with `ds.ego_stats`), not a per-clip rescale, which would erase real speed differences.
+  Indoor clips read ~20 % faster than street clips, a hint that the unit shrinks with scene size. Per-clip speeds:
+  `<tree>/index/pose_speed_v0.parquet` (`prep/spatialvid_hq/pose_speed.py`). The demo notebook
   (`notebooks/spatialvid_hq_loader_demo.ipynb`) plots frames next to the recovered camera path so you can judge for
   yourself.
 
@@ -159,13 +164,20 @@ Everything below is a keyword argument to `load`. Defaults are in bold.
 test. Test channels never appear in train, so test is the number that says whether you learned walking or learned
 those creators.
 
-**`subset`** = **`"person_carried_v0"`** | `"all"`. Default is the person-walking subset. Use `"all"` if you want
-every carrier (driving, drones, boats...). The split labels are the same either way, so a model trained on the subset
-can be evaluated on the whole-store test split.
+**`subset`** = **`"person_carried_v0"`** | `"person_walking_v0"` | `"all"`. Default is the person-carried subset.
+`"person_walking_v0"` drops its clips where the camera mostly stands still or spins in place (177,085 clips, 83 %:
+train 154,799 / val 12,521 / test 9,765; `subsets/person_walking_v0.report.md`). Use `"all"` if you want every
+carrier (driving, drones, boats...). The split labels are the same either way, so a model trained on a subset can be
+evaluated on the whole-store test split.
 
 **`where`** = a pandas query over the `ds.clips` columns listed above, for finer selection:
 `where="carrier == 'walk'"`, `where="scene_l1 == 'Urban' and tod == 'night'"`, `where="dur_bucket == 'long'"`.
 (The raw per-clip tags such as `time_of_day` live in the record, not in this table; use the coarse columns.)
+With `subset="person_walking_v0"` the per-clip motion index is in `ds.clips` too: `moving_frac` (share of the clip
+moving faster than 0.04 units/s, about 0.3 m/s), `spin_frac` (share rotating faster than 30°/s), `step_p50` (median
+speed, units/s), `fwd_frac` (1 = straight ahead, negative = backwards), `turn_dps`, `turn_p90`, `vert_frac`, e.g.
+`where="moving_frac >= 0.9 and fwd_frac > 0.8"`. Different thresholds than the subset's (`moving_frac >= 0.5`,
+`spin_frac < 0.1`) need a new subset: `python -m datasets.prep.spatialvid_hq.motion_subset --min-moving X --max-spin Y --name ...`.
 
 **`channel_cap`** = fraction of clips any single channel may contribute (e.g. `0.02`). Randomly thins the dominant
 channels. Use it if you suspect a model is memorising the two or three biggest creators.
@@ -242,7 +254,9 @@ every decoded frame and `batch["video_rec"]` `[B]` the record index. `batch["pos
 at each frame (`[tx ty tz qx qy qz qw]`, world→camera) and `batch["ego"]` `[B, T-1, 6]` the motion between
 consecutive frames, `[dx dy dz rx ry rz]`, in the earlier frame's camera axes: `ego[:, t-1]` is the move *into* frame
 `t`. Walking forward is a steady positive `dz`; because poses are world→camera, a right turn is a *negative* `ry`. Without the transform, `ds.ego_motion_at(batch["video_rec"], batch["video_t_sec"])` computes the same two
-arrays by hand. Per-channel RGB mean/std for normalisation are in `ds.stats`.
+arrays by hand. Per-channel RGB mean/std for normalisation are in `ds.stats`; the 6 ego components' mean/std for
+the loaded subset are in `ds.ego_stats` (`(ego - mean) / std`; computed at 15 Hz on train windows, so `None` at other
+rates, because the per-frame deltas scale with the frame interval).
 
 The full walk-through, with plots, is `notebooks/spatialvid_hq_loader_demo.ipynb`.
 

@@ -182,3 +182,15 @@ def test_store_part_picks_folder_store():
     mixed = split.assign(split=["train", "train", "train", "test", "unused"])
     with pytest.raises(ValueError):
         store_part(parts, mixed, "train")                                 # spans two parts
+
+
+def test_spatialvid_ego_stats_per_subset():
+    from visionlab.datasets import get_config
+
+    m = get_config("spatialvid-hq").metadata
+    ego = m["stats"]["egomotion_subsets"]
+    assert set(ego) == {"person_carried_v0", "person_walking_v0"} <= set(get_config("spatialvid-hq").subsets)
+    assert m["stats"]["egomotion"] is ego[m["default_subset"]]
+    for e in ego.values():
+        assert e["rate_hz"] == 15 and len(e["mean"]) == len(e["std"]) == 6
+        assert e["mean"][2] > 0 and all(s > 0 for s in e["std"])        # walking forward: +dz on average

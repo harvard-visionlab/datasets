@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.23.0] - 2026-11-16
+
+### Added
+- SpatialVID-HQ subset `person_walking_v0`: `person_carried_v0` minus clips where the camera mostly stands still
+  (`moving_frac < 0.5`, 33,193 clips) or spins in place (`spin_frac >= 0.1`, 2,825); 177,085 clips. It carries the
+  per-clip motion index columns (`moving_frac`, `spin_frac`, `step_p50`, `fwd_frac`, `turn_dps`, ...) for `where=`.
+  Built by `prep/spatialvid_hq/motion_subset.py` from `index/pose_speed_v0.parquet` (`prep/spatialvid_hq/pose_speed.py`).
+- Ego-motion normalisation stats for SpatialVID-HQ: `metadata["stats"]["egomotion_subsets"][<subset>]` (and
+  `["egomotion"]` for the default subset), mean/std of the 6 `ego_motion_at` components at 15 Hz on train windows,
+  raw pose units (no per-clip rescale). `VideoDataset.ego_stats` gives the entry for the loaded subset (None at other
+  rates). Tool: `prep/spatialvid_hq/ego_stats.py`.
+- Dataset card: pose scale findings (not metric, ~8 m per unit, clip speeds rank correctly).
+
 ## [0.22.1] - 2026-11-10
 
 ### Changed
