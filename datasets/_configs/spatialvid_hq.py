@@ -28,7 +28,10 @@ register(DatasetConfig(
         ("h265", "456x256", 15): f"{S3}/spatialvid-hq-h265-456x256-15fps",
     },
     splits={"v1": f"{S3}/splits/v1.parquet", "v3": f"{S3}/splits/v3.parquet"},
-    subsets={"person_carried_v0": f"{S3}/subsets/person_carried_v0.parquet"},
+    subsets={"person_carried_v0": f"{S3}/subsets/person_carried_v0.parquet",
+             # person_carried_v0 minus clips that mostly stand still or spin in place (prep/spatialvid_hq/motion_subset.py);
+             # carries the per-clip motion index columns (moving_frac, spin_frac, step_p50, fwd_frac, turn_dps, ...) for where=
+             "person_walking_v0": f"{S3}/subsets/person_walking_v0.parquet"},
     metadata={
         "tree": "SpatialVID-HQ-slipstream",          # directory name under the lab's shared DataSets/VideoDatasets tree
         "default_fmt": "h265", "default_res": "456x256", "default_split": "train", "default_split_version": "v3",
