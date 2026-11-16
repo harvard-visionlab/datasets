@@ -14,6 +14,9 @@ Per clip, from the ~5 Hz annotated poses (times = annot_frame_idx / source fps):
   vert_frac      mean |dy| / step length (bob / stairs share)
   fwd_frac       mean dz / step length (1 = straight ahead)
   turn_dps       median |rotation| per second (deg/s; scale-free control)
+  turn_p90       90th percentile of |rotation| per second (deg/s; fast pans / spins)
+  moving_frac    share of the clip's duration with step speed >= MOVING_UPS (not standing still)
+  spin_frac      share of the clip's duration with rotation >= SPIN_DPS (fast pan / spin)
   meta_speed     the authors' move_dist / duration_s (what make_subset caps at 0.5)
 
     uv run --no-sync --group video python -m datasets.prep.spatialvid_hq.pose_speed --out <tree> --workers 16
@@ -30,7 +33,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-COLS = ["path_speed", "step_p50", "fwd_p50", "net_speed", "vert_frac", "fwd_frac", "turn_dps"]
+COLS = ["path_speed", "step_p50", "fwd_p50", "net_speed", "vert_frac", "fwd_frac", "turn_dps", "turn_p90", "moving_frac",
+        "spin_frac"]
+MOVING_UPS = 0.04      # pose units/s: ~p15 of clip speeds, a quarter of the forward-walker median (0.164)
+SPIN_DPS = 30.0        # deg/s: a fast pan (walking turns are ~1-10 deg/s)
 
 
 def clip_speeds(poses: np.ndarray, t: np.ndarray) -> dict:
@@ -45,6 +51,7 @@ def clip_speeds(poses: np.ndarray, t: np.ndarray) -> dict:
     step = np.linalg.norm(ego[:, :3], axis=1)
     dur = t[-1] - t[0]
     moving = step > 1e-9
+    v, w = step[ok] / dt[ok], np.degrees(np.linalg.norm(ego[ok, 3:], axis=1) / dt[ok])
     return dict(
         path_speed=step.sum() / dur,
         step_p50=float(np.median(step[ok] / dt[ok])),
@@ -52,7 +59,10 @@ def clip_speeds(poses: np.ndarray, t: np.ndarray) -> dict:
         net_speed=float(np.linalg.norm(c[-1] - c[0]) / dur),
         vert_frac=float(np.mean(np.abs(ego[moving, 1]) / step[moving])) if moving.any() else np.nan,
         fwd_frac=float(np.mean(ego[moving, 2] / step[moving])) if moving.any() else np.nan,
-        turn_dps=float(np.degrees(np.median(np.linalg.norm(ego[ok, 3:], axis=1) / dt[ok]))),
+        turn_dps=float(np.median(w)),
+        turn_p90=float(np.quantile(w, 0.9)),
+        moving_frac=float(dt[ok][v >= MOVING_UPS].sum() / dt[ok].sum()),
+        spin_frac=float(dt[ok][w >= SPIN_DPS].sum() / dt[ok].sum()),
     )
 
 
