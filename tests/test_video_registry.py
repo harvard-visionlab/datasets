@@ -77,6 +77,66 @@ def test_window_sampler_seeded_and_filters_short_clips():
     assert (t1 >= 0).all() and (t1 + 8.0 <= np.repeat(ws.max_t0 + 8.0, 2) + 1e-6).all()
 
 
+def _eval_ds(fps=None):
+    records, _, _ = _tables()
+    if fps is not None:
+        records = records.assign(fps=fps)
+    return VideoDataset("x", ("h265", "456x256", 15), None, None, records, "all", None, 15)
+
+
+def test_window_sampler_T_uses_decoder_window_length():
+    ds = _eval_ds()
+    ws = ds.window_sampler(T=61)
+    assert ws.window_s == pytest.approx(61 / 15)                       # T / rate, not (T - 1) / rate
+    assert ds.window_sampler(T=61, rate_hz=30).window_s == pytest.approx(61 / 30)
+    with pytest.raises(ValueError):
+        ds.window_sampler()
+    with pytest.raises(ValueError):
+        ds.window_sampler(4.0, T=61)
+
+
+class _Meta:                                                            # torchcodec VideoStreamMetadata stand-in
+    def __init__(self, dur, fps):
+        self.begin_stream_seconds, self.end_stream_seconds, self.duration_seconds, self.average_fps = 0.0, dur, dur, fps
+
+
+@pytest.mark.parametrize("fps", [15.0, 14.985015, 23.976024, 16.666667, 30.0])
+def test_windows_fit_slipstream_decoder(fps):
+    """Every t0 the sampler (at its extreme) or eval_windows can produce is accepted by DecodeVideoWindow."""
+    dec = pytest.importorskip("slipstream.decoders")
+    stage = dec.DecodeVideoWindow(T=61, rate_hz=15, t0_key="t0", device="cpu")
+    ds = _eval_ds(fps)
+    ws = ds.window_sampler(T=61)
+    recs, t0 = ds.eval_windows(T=61)
+    dur = dict(zip(ds.indices, ds.clips.duration_s))
+    for r, m in zip(ws.recs, ws.max_t0):                                # latest start the sampler can draw
+        stage._times(_Meta(dur[r], fps), float(np.float32(m)), None)
+    for r, t in zip(recs, t0):
+        stage._times(_Meta(dur[r], fps), float(t), None)
+
+
+def test_eval_windows_fixed_and_subset_invariant():
+    ds = _eval_ds()
+    recs, t0 = ds.eval_windows(T=61)
+    assert set(recs.tolist()) == {1, 2, 3, 4, 6, 7}                     # 3 s and 2 s clips are shorter than 61/15 + margin
+    r2, t2 = ds.eval_windows(T=61)
+    assert np.array_equal(recs, r2) and np.array_equal(t0, t2)
+    sub = VideoDataset("x", ds.store_key, None, None, ds.clips.iloc[[4, 2]], "all", None, 15)   # another subset / order
+    rs, ts = sub.eval_windows(T=61)
+    assert dict(zip(rs, ts)) == {r: t for r, t in zip(recs, t0) if r in (2, 4)}
+    frames = t0.astype(np.float64) * 30.0
+    assert np.allclose(frames, np.round(frames), atol=1e-3)            # on a stored frame
+    mx = ds._max_t0(61 / 15, 3)[recs]
+    assert (t0 >= 0).all() and (t0 <= mx + 1e-6).all()
+    _, tv = ds.eval_windows(T=61, version="v1")
+    assert not np.array_equal(t0, tv)
+    # pinned: the v0 windows must never change (they are what val/test scores are compared on)
+    assert t0.tolist() == pytest.approx(PINNED_EVAL_T0, abs=1e-6)
+
+
+PINNED_EVAL_T0 = [1.8333334, 1.4, 0.23333333, 7.9, 5.733333, 0.56666666]
+
+
 def test_interpolate_poses_in_seconds():
     t_annot = np.array([0.0, 0.2, 0.4])
     poses = np.array([[0, 0, 0, 0, 0, 0, 1], [1, 0, 0, 0, 0, 0, 1], [2, 0, 0, 0, 0, 0, 1]], np.float32)

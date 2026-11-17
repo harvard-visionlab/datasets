@@ -8,7 +8,7 @@
 `subset` defaults to the config's `default_subset` (spatialvid-hq: person_carried_v0, the training population); the
 split table itself labels *every* store clip, so `subset="all"` gives the whole store's split members (e.g. all 16,932
 v3 val clips rather than the population's 15,029).
-    loader = SlipstreamLoader(ds, indices=ds.window_sampler(8.0).recs, pipelines={"video": [DecodeVideoWindow(...)]},
+    loader = SlipstreamLoader(ds, indices=ds.window_sampler(T=120).recs, pipelines={"video": [DecodeVideoWindow(...)]},
                               after_batch_transforms=[ds.ego_motion_transform()], ...)
     batch["video"], batch["poses"], batch["ego"]                        # [B,T,3,H,W] uint8, [B,T,7], [B,T-1,6]
     poses = ds.poses_at(batch["video_rec"], batch["video_t_sec"])      # the same poses, by hand
@@ -252,12 +252,49 @@ class VideoDataset:
         return self.video_store().record(int(record_idx), with_video=with_video)
 
     # --- windows
-    def window_sampler(self, window_s: float, anchors_per_clip: int = 1, seed: int = 0, end_margin_frames: int = 3) -> WindowSampler:
-        """Clips shorter than the window are dropped; t0 ∈ [0, duration − window − margin]."""
+    def _window_s(self, window_s: float | None, T: int | None, rate_hz: float | None) -> float:
+        if (window_s is None) == (T is None):
+            raise ValueError("give exactly one of window_s or T")
+        if T is None:
+            return float(window_s)
+        rate = rate_hz or self.rate_hz
+        if not rate:
+            raise ValueError("T needs rate_hz (none given and the dataset has no rate_hz)")
+        return T / float(rate)
+
+    def _max_t0(self, window_s: float, end_margin_frames: int) -> np.ndarray:
         dur = self.clips["duration_s"].to_numpy(np.float64); fps = self.clips["fps"].to_numpy(np.float64)
-        max_t0 = dur - window_s - end_margin_frames / fps
+        return dur - window_s - end_margin_frames / fps
+
+    def window_sampler(self, window_s: float | None = None, anchors_per_clip: int = 1, seed: int = 0,
+                       end_margin_frames: int = 3, *, T: int | None = None, rate_hz: float | None = None) -> WindowSampler:
+        """Clips shorter than the window are dropped; t0 ∈ [0, duration − window − margin].
+
+        The window length must be slipstream's: `DecodeVideoWindow(T, rate_hz).window_s = T / rate_hz` (T frames, each
+        lasting 1/rate_hz), not (T − 1) / rate_hz. Prefer `window_sampler(T=61)` (rate_hz defaults to the dataset's),
+        which computes it; a window_s shorter than T / rate_hz lets t0 land where the decoder refuses the window."""
+        window_s = self._window_s(window_s, T, rate_hz)
+        max_t0 = self._max_t0(window_s, end_margin_frames)
         ok = max_t0 > 0
         return WindowSampler(self.indices[ok], max_t0[ok], window_s, anchors_per_clip, seed)
+
+    def eval_windows(self, T: int, rate_hz: float | None = None, version: str = "v0",
+                     end_margin_frames: int = 3) -> tuple[np.ndarray, np.ndarray]:
+        """Fixed evaluation windows: one (record, t0) per clip long enough for T frames at rate_hz, same shape as
+        `window_sampler(...).sample()`. t0 is a pure function of (clip_id, version, the clip's stored duration and fps,
+        T / rate_hz): a hash of the clip id picks the position, snapped down to one of the clip's stored frames. So a
+        clip gets the same window in every subset, `where=` filter, split version and run, and stores with the same
+        fps (any resolution) give the same windows. `version` is the only way to draw a different set."""
+        import hashlib
+        window_s = self._window_s(None, T, rate_hz)
+        max_t0 = self._max_t0(window_s, end_margin_frames)
+        ok = max_t0 > 0
+        ids = self.clips["clip_id"].to_numpy()[ok]
+        u = np.array([int.from_bytes(hashlib.blake2b(f"{c}:{version}".encode(), digest_size=8).digest(), "little") / 2.0 ** 64
+                      for c in ids], dtype=np.float64)
+        fps = self.clips["fps"].to_numpy(np.float64)[ok]
+        t0 = np.floor(u * max_t0[ok] * fps) / fps                       # on a stored frame, <= max_t0
+        return self.indices[ok].astype(np.int64), t0.astype(np.float32)
 
     # --- poses
     def _annot(self, rec: int) -> tuple[np.ndarray, np.ndarray]:

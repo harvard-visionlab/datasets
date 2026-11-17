@@ -4,7 +4,7 @@ Same convention as `VideoDataset.ego_motion_at` / `video.ego_motion`: per frame 
 previous frame's camera axes (OpenCV: x right, y down, z forward), translation in raw MegaSaM pose units (no per-clip
 rescale: their scale is consistent enough that clip speeds order correctly, checked by eye 2026-11-16), rotation in
 radians. Sampled like training: seeded random windows of T frames at `rate_hz` from the train split (one per clip per
-epoch, `ds.window_sampler`), poses interpolated to the frame times (`t0 + k / rate_hz`), deltas between consecutive
+epoch, `ds.window_sampler(T=T)`), poses interpolated to the frame times (`t0 + k / rate_hz`), deltas between consecutive
 frames. Mean/std per component (z-scoring = one global rescale, so clip ordering is untouched), plus quantiles for
 the tails. No video is decoded.
 
@@ -27,7 +27,7 @@ def ego_stats(subset: str, T: int, rate_hz: float, epochs: int, seed: int, split
     from visionlab.datasets import load
 
     ds = load("spatialvid-hq", split=split, subset=subset, rate_hz=rate_hz, where=where, download=False)
-    sampler = ds.window_sampler((T - 1) / rate_hz, seed=seed)
+    sampler = ds.window_sampler(T=T, rate_hz=rate_hz, seed=seed)    # T / rate_hz, as the decoder (v0.23.0 used (T-1)/rate)
     k = np.arange(T) / rate_hz
     n = 0; s1 = np.zeros(6); s2 = np.zeros(6); chunks = []
     rng = np.random.default_rng(seed); t0_ = time.time()
