@@ -192,6 +192,11 @@ Use 15 Hz unless you need finer temporal resolution. At 15 Hz walking motion is 
 interpolated from the same 5 Hz keyframes, so nothing about pose accuracy changes with frame rate. Use 30 Hz for
 fast motion or optical-flow-like targets. Use `fps="native"` only if you need every source frame.
 
+_Stored frame rates vary a little._ The fps stores only drop frames by a whole factor (every 2nd frame of a 30 fps
+source), so every stored frame is an original one. Sources that don't divide evenly keep their own rate: in the
+15 fps store, ~89 % of val/test clips are at 15 or 14.985 fps and the rest at 16–25 fps. `DecodeVideoWindow`
+takes frames at `t0 + k / RATE` from any of them, and `ds.clips["fps"]` gives each clip's stored rate.
+
 **`res`** = **`"456x256"`** | `"640x360"`. Both are 16:9. 456×256 is 40 % fewer bytes and enough for 224-pixel
 inputs; use 640×360 if you crop or need more detail.
 
@@ -208,7 +213,7 @@ from slipstream.decoders import DecodeVideoWindow
 from slipstream.loader import SlipstreamLoader
 
 T, RATE, B = 120, 15.0, 8                                   # 8 s windows at 15 Hz, batch of 8
-clips = ds.window_sampler(window_s=T / RATE).recs           # record indices of clips long enough for an 8 s window
+clips = ds.window_sampler(T=T).recs                         # record indices of clips long enough for an 8 s window
 
 stage = DecodeVideoWindow(T=T, rate_hz=RATE, seed=0, resize=224, device="cpu", num_workers=16)
 loader = SlipstreamLoader(ds, indices=clips, batch_size=B, shuffle=True, seed=0, drop_last=True,
@@ -231,11 +236,28 @@ up with `frames`). The `window_sampler` call is only there to drop clips shorter
 comes from the two seeds; the loader reseeds itself every pass, and `loader.set_epoch(e)` restores any epoch
 exactly (checkpoint resume, DDP).
 
-**Fixed starts** (evaluation, or several windows per clip). Draw `(clip, t0)` pairs yourself and hand them to the
-loader as per-sample data; the stage then uses them instead of drawing its own:
+**Evaluation: the fixed val/test windows.** `ds.eval_windows(T)` gives one fixed `(clip, t0)` per clip long enough
+for the window. Use these for every val/test number so scores are comparable across runs and models:
 
 ```python
-sampler = ds.window_sampler(window_s=T / RATE, anchors_per_clip=2, seed=0)
+recs, t0 = ds.eval_windows(T=61)                            # val person_walking_v0: 10,839 windows (test 8,495)
+stage = DecodeVideoWindow(T=61, rate_hz=15, t0_key="t0", resize=224, device="cpu", num_workers=16)
+loader = SlipstreamLoader(ds, indices=recs, sample_data={"t0": t0}, batch_size=B, shuffle=False, drop_last=False,
+                          image_field="video", pipelines={"video": [stage]},
+                          after_batch_transforms=[ds.ego_motion_transform()])
+```
+
+`drop_last=False` matters: the loader's default drops the last partial batch. Each clip's `t0` is fixed by a hash of
+its clip id (`version="v0"`), snapped to one of its stored frames, so a clip has the same window in every subset
+(`person_walking_v0` windows are exactly the matching `person_carried_v0` ones), `where=` filter and run. Clips
+shorter than the window are left out (val: 1,708 of 12,521 for 61 frames at 15 Hz). A full pass decodes at ~220
+windows/s with 48 decode workers on machina (val ~50 s, test ~40 s) and ~90 windows/s with 16.
+
+**Fixed starts of your own** (several windows per clip, other seeds). Draw `(clip, t0)` pairs yourself and hand
+them to the loader as per-sample data; the stage then uses them instead of drawing its own:
+
+```python
+sampler = ds.window_sampler(T=T, anchors_per_clip=2, seed=0)
 recs, t0 = sampler.sample(epoch=0)                          # two (clip, t0) pairs per clip; same seed → same pairs
 stage = DecodeVideoWindow(T=T, rate_hz=RATE, t0_key="t0", resize=224, device="cpu", num_workers=16)
 loader = SlipstreamLoader(ds, indices=recs, sample_data={"t0": t0}, batch_size=B, shuffle=False,
@@ -243,7 +265,10 @@ loader = SlipstreamLoader(ds, indices=recs, sample_data={"t0": t0}, batch_size=B
                           after_batch_transforms=[ds.ego_motion_transform()])
 ```
 
-Here `indices` may repeat a clip and `t0` is aligned with it element for element. If you want fresh starts each
+Here `indices` may repeat a clip and `t0` is aligned with it element for element. Give `window_sampler` the window
+as `T=` (it uses `T / rate_hz`, the decoder's window length: T frames, each 1/rate_hz long). Before v0.24.0 the
+examples passed `window_s` by hand; `(T - 1) / RATE` there is 1 frame too short and lets `t0` land where
+`DecodeVideoWindow` refuses the window ("does not fit the clip") on 24, 25 and 30 fps clips. If you want fresh starts each
 epoch in this mode you must call `sampler.sample(epoch)` again and build a new loader; for training the first form
 does that for you.
 

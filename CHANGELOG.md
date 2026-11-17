@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [0.24.0] - 2026-11-17
+
+### Added
+- `VideoDataset.eval_windows(T, rate_hz=None, version="v0")`: fixed evaluation windows, one `(record, t0)` per clip
+  long enough for the window (same shape as `window_sampler(...).sample()`). `t0` is a hash of the clip id snapped
+  to a stored frame, so a clip keeps its window across subsets, `where=` filters, split versions and runs. SpatialVID-HQ
+  person_walking_v0 at T=61, 15 Hz: val 10,839, test 8,495 windows; all val/test windows of person_carried_v0 and
+  every clip's latest possible start decoded on machina (~220 windows/s, 48 workers).
+- `window_sampler(T=..., rate_hz=None)`: give the window in frames.
+
+### Fixed
+- `window_sampler` window length: slipstream's `DecodeVideoWindow` window is `T / rate_hz`; callers passing
+  `window_s=(T - 1) / rate_hz` (as `prep/spatialvid_hq/ego_stats.py` did) could draw `t0` the decoder refuses on 24,
+  25 and 30 fps clips. `window_sampler(T=)` computes it; tests now check sampler and eval windows against
+  slipstream's own fit rule. The v0.23.0 ego stats are unaffected (they decode nothing; the window bound changes
+  by one frame).
+
+### Docs
+- SpatialVID-HQ card: evaluation windows (use `drop_last=False`), `window_sampler(T=)`, stored frame rates per clip.
+
 ## [0.23.0] - 2026-11-16
 
 ### Added
