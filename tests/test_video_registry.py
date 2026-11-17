@@ -124,8 +124,8 @@ def test_eval_windows_fixed_and_subset_invariant():
     sub = VideoDataset("x", ds.store_key, None, None, ds.clips.iloc[[4, 2]], "all", None, 15)   # another subset / order
     rs, ts = sub.eval_windows(T=61)
     assert dict(zip(rs, ts)) == {r: t for r, t in zip(recs, t0) if r in (2, 4)}
-    frames = t0.astype(np.float64) * 30.0
-    assert np.allclose(frames, np.round(frames), atol=1e-3)            # on a stored frame
+    frames = t0.astype(np.float64) * 30.0 - 0.5
+    assert np.allclose(frames, np.round(frames), atol=1e-3)            # mid-point of a stored frame
     mx = ds._max_t0(61 / 15, 3)[recs]
     assert (t0 >= 0).all() and (t0 <= mx + 1e-6).all()
     _, tv = ds.eval_windows(T=61, version="v1")
@@ -134,7 +134,7 @@ def test_eval_windows_fixed_and_subset_invariant():
     assert t0.tolist() == pytest.approx(PINNED_EVAL_T0, abs=1e-6)
 
 
-PINNED_EVAL_T0 = [1.8333334, 1.4, 0.23333333, 7.9, 5.733333, 0.56666666]
+PINNED_EVAL_T0 = [1.85, 1.4166666, 0.25, 7.9166665, 5.75, 0.5833333]
 
 
 def test_interpolate_poses_in_seconds():

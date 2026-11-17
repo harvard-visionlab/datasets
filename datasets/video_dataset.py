@@ -282,18 +282,20 @@ class VideoDataset:
                      end_margin_frames: int = 3) -> tuple[np.ndarray, np.ndarray]:
         """Fixed evaluation windows: one (record, t0) per clip long enough for T frames at rate_hz, same shape as
         `window_sampler(...).sample()`. t0 is a pure function of (clip_id, version, the clip's stored duration and fps,
-        T / rate_hz): a hash of the clip id picks the position, snapped down to one of the clip's stored frames. So a
+        T / rate_hz): a hash of the clip id picks one of the clip's stored frames and t0 is that frame's mid-point. So a
         clip gets the same window in every subset, `where=` filter, split version and run, and stores with the same
         fps (any resolution) give the same windows. `version` is the only way to draw a different set."""
         import hashlib
         window_s = self._window_s(None, T, rate_hz)
-        max_t0 = self._max_t0(window_s, end_margin_frames)
-        ok = max_t0 > 0
+        fps = self.clips["fps"].to_numpy(np.float64)
+        # candidate starts: frame mid-points (k + 0.5) / fps <= max_t0. A mid-point, not the frame's pts, so float32
+        # rounding can never tip the decoder's "frame shown at t" onto the previous frame.
+        n = np.floor(self._max_t0(window_s, end_margin_frames) * fps - 0.5) + 1
+        ok = n >= 1
         ids = self.clips["clip_id"].to_numpy()[ok]
         u = np.array([int.from_bytes(hashlib.blake2b(f"{c}:{version}".encode(), digest_size=8).digest(), "little") / 2.0 ** 64
                       for c in ids], dtype=np.float64)
-        fps = self.clips["fps"].to_numpy(np.float64)[ok]
-        t0 = np.floor(u * max_t0[ok] * fps) / fps                       # on a stored frame, <= max_t0
+        t0 = (np.floor(u * n[ok]) + 0.5) / fps[ok]
         return self.indices[ok].astype(np.int64), t0.astype(np.float32)
 
     # --- poses
