@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.24.2] - 2026-11-17
+
+### Added
+- SpatialVID-HQ `metadata["methods"]` (`{"text", "refs"}`) for model-rearing's `mr methods`: source, licence, split
+  v3, person_carried_v0 / person_walking_v0 definitions, MegaSaM poses, re-encoding; refs SpatialVID (arXiv) and MegaSaM.
+
 ## [0.24.1] - 2026-11-17
 
 ### Changed

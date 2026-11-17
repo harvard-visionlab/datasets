@@ -254,3 +254,11 @@ def test_spatialvid_ego_stats_per_subset():
     for e in ego.values():
         assert e["rate_hz"] == 15 and len(e["mean"]) == len(e["std"]) == 6
         assert e["mean"][2] > 0 and all(s > 0 for s in e["std"])        # walking forward: +dz on average
+
+
+def test_spatialvid_methods_entry():
+    """model-rearing `mr methods` reads metadata["methods"] = {"text", "refs"} and str.formats text with the metadata."""
+    meta = get_config("spatialvid-hq").metadata
+    m = meta["methods"]
+    assert m["text"].format(**meta) == m["text"]                       # no template fields / stray braces
+    assert all({"cite", "full"} <= set(r) for r in m["refs"]) and len(m["refs"]) == 2

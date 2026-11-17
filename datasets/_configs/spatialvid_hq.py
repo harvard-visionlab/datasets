@@ -46,6 +46,37 @@ register(DatasetConfig(
         # The split table labels every index clip (365,362 rows incl. 66 `excluded`); the training *population* is the
         # subset (`in_subset`). load() applies it by default; pass subset="all" for the whole store.
         "default_subset": "person_carried_v0",
+        # methods paragraph for papers (model-rearing `mr methods`: {"text", "refs"}; text is str.format'ed with this
+        # metadata, so no braces). Run-specific details (subset used, window, store, stats) are written by the harness.
+        "methods": {
+            "text": (
+                "SpatialVID-HQ: 365,362 clips of up to 15 s (1,112 hours) cut from 22,543 YouTube videos of real-world "
+                "scenes filmed by a moving camera, each annotated with camera poses estimated at ~5 Hz by MegaSaM, a "
+                "structure-and-motion method for casual videos (poses are consistent within and across clips but not "
+                "metric). Annotations are released under CC BY-NC-SA 4.0 for research use; the videos remain their "
+                "uploaders'. We used the visionlab-datasets curation of it: split v3, which assigns whole source videos "
+                "to one split, stratified over scene type, time of day, weather, crowd density, motion tags and camera "
+                "carrier (validation holds out whole videos from training channels; test holds out seven entire "
+                "channels never seen in training); the person_carried_v0 subset, 213,103 clips from 82 channels in "
+                "which the camera is carried by a walking person (hand-held, head-mounted or on a stabiliser), assigned "
+                "by manual review of each channel; and its person_walking_v0 subset, which further drops clips where "
+                "the camera moves (at least 0.04 pose units/s, about 0.3 m/s) for less than half of the clip or rotates "
+                "faster than 30 deg/s for 10% of it or more (177,085 clips: 154,799 train, 12,521 validation, 9,765 "
+                "test). Clips were re-encoded from 1280 x 720 pixels to 456 x 256 or 640 x 360, keeping every frame or "
+                "every k-th frame (integer decimation), and poses were interpolated to frame times (linear translation, "
+                "spherical-linear rotation)."),
+            "refs": [
+                {"cite": "Wang et al., 2025",
+                 "full": "Wang, J., et al. (2025). SpatialVID: A large-scale video dataset with spatial annotations. "
+                         "arXiv:2509.09676.",
+                 "doi": "10.48550/arXiv.2509.09676"},
+                {"cite": "Li et al., 2025",
+                 "full": "Li, Z., Tucker, R., Cole, F., Wang, Q., Jin, L., Ye, V., Kanazawa, A., Holynski, A., & Snavely, "
+                         "N. (2025). MegaSaM: Accurate, fast and robust structure and motion from casual dynamic videos. "
+                         "In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).",
+                 "doi": "10.48550/arXiv.2412.04463"},
+            ],
+        },
         "res_aliases": {"640": "640x360", "360p": "640x360", "456": "456x256", "256p": "456x256"},
         "num_records": 365_296,
         "num_train": 186_710, "num_val": 15_029, "num_test": 11_364,           # person_carried_v0 ∩ v3
