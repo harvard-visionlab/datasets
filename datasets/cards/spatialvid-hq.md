@@ -240,7 +240,7 @@ exactly (checkpoint resume, DDP).
 for the window. Use these for every val/test number so scores are comparable across runs and models:
 
 ```python
-recs, t0 = ds.eval_windows(T=61)                            # val person_walking_v0: 10,839 windows (test 8,495)
+recs, t0 = ds.eval_windows(T=61)                            # val person_walking_v0: 10,820 windows (test 8,480)
 stage = DecodeVideoWindow(T=61, rate_hz=15, t0_key="t0", resize=224, device="cpu", num_workers=16)
 loader = SlipstreamLoader(ds, indices=recs, sample_data={"t0": t0}, batch_size=B, shuffle=False, drop_last=False,
                           image_field="video", pipelines={"video": [stage]},
@@ -248,9 +248,9 @@ loader = SlipstreamLoader(ds, indices=recs, sample_data={"t0": t0}, batch_size=B
 ```
 
 `drop_last=False` matters: the loader's default drops the last partial batch. Each clip's `t0` is fixed by a hash of
-its clip id (`version="v0"`), snapped to one of its stored frames, so a clip has the same window in every subset
+its clip id (`version="v0"`) and sits at the mid-point of one of its stored frames, so a clip has the same window in every subset
 (`person_walking_v0` windows are exactly the matching `person_carried_v0` ones), `where=` filter and run. Clips
-shorter than the window are left out (val: 1,708 of 12,521 for 61 frames at 15 Hz). A full pass decodes at ~220
+shorter than the window are left out (val: 1,701 of 12,521 for 61 frames at 15 Hz). A full pass decodes at ~220
 windows/s with 48 decode workers on machina (val ~50 s, test ~40 s) and ~90 windows/s with 16.
 
 **Fixed starts of your own** (several windows per clip, other seeds). Draw `(clip, t0)` pairs yourself and hand

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.24.1] - 2026-11-17
+
+### Changed
+- `eval_windows`: `t0` is now the mid-point of a stored frame (was the frame's start). float32 rounding of a start
+  time just below the frame's pts could make the decoder ("frame shown at t") pick the previous frame. Checked on
+  machina: every val/test window's first decoded frame is the intended one. The v0 windows changed (released a day
+  earlier, unused); person_walking_v0 at T=61, 15 Hz: val 10,820, test 8,480 windows.
+
 ## [0.24.0] - 2026-11-17
 
 ### Added
