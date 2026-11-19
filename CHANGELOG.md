@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.25.0] - 2026-11-19
+
+### Added
+- procthor-walks-objects / -empty: lossless stores of the rtq-r160 `val_unseen` walks (400 each; the tjepa-dev V3
+  benchmark): `load(name, split="val_unseen", split_version="rtq-r160", fmt="lossless")`. Frames byte-identical to
+  Rupert's H5 (H.264 RGB lossless, libx264rgb qp 0, GOP 60; 5.8 / 5.0 GB), positions and headings float64 exactly
+  as stored, clip_ids as in the h264 stores (+ `h264_record_idx`). Verified for every walk: all frames, all 6,400
+  benchmark windows through `DecodeVideoWindow`, positions and headings bit-identical; recorded in each store's
+  `store_manifest.json` (`verify`, with per-file source sha256). Built by `prep/procthor_walks/lossless.py`. On S3
+  (private), the lab_storage master and shared netscratch.
+
+### Changed
+- `load()` (video) raises when the chosen store holds only part of the requested split, instead of silently
+  returning the clips it has.
+
 ## [0.24.2] - 2026-11-17
 
 ### Added

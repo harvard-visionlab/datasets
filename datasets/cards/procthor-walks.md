@@ -181,6 +181,33 @@ roughly 800 windows/s.
 To compare furnished and empty, load both and index the same `record_idx`. The step-by-step walk-through, with plots,
 is `notebooks/datasets/procthor_walks_objects.ipynb` (and `..._empty.ipynb`).
 
+**Exact frames for the val_unseen benchmark (`fmt="lossless"`).** The default stores are near-lossless (~43 dB),
+which is fine for training but not for reproducing numbers scored on the original H5 frames, e.g. tjepa-dev V3's
+held-out benchmark (rtq-r160 `val_unseen`, the 16 windows above per walk, 6,400 windows). For those 400 walks there
+is a lossless store per dataset:
+
+```python
+ds = load("procthor-walks-objects", split="val_unseen", split_version="rtq-r160", fmt="lossless")   # or -empty
+```
+
+It decodes with the same loader code as above (CPU decode: NVDEC has no H.264 RGB 4:4:4). What differs:
+
+- `video` is H.264 RGB lossless (libx264rgb, qp 0, GOP 60), ~14 MB per walk (furnished) / ~12.5 MB (empty);
+  5.8 / 5.0 GB per store.
+- `positions` `[1000, 2]` and `headings` `[1000]` are **float64**, exactly the H5 values (the default stores hold
+  float32 copies).
+- `clip_id` is the same as in the default stores (`val/house_XXXXX/seed_XXXX`), so walks pair across stores. Each
+  record also carries `h264_record_idx`, the walk's record index in the default val store.
+- Only `val_unseen` is in it. Asking it for any other split raises an error and does not silently return a subset.
+
+Verified (2026-11-19, `prep/procthor_walks/lossless.py`; result in each store's `store_manifest.json` → `verify`).
+For all 400 walks of each dataset:
+- all 1,000 frames decoded with torchcodec equal the H5 `visual_scenes`, byte for byte;
+- all 6,400 benchmark windows decoded through `DecodeVideoWindow` (`t0 = (start + 0.5) / 30`) equal the H5 slices;
+- positions and headings are bit-identical.
+
+The manifest also lists the sha256 of every source file.
+
 ### Where the data lives
 
 `load()` looks in `$SLIPSTREAM_CACHE_DIR`, then downloads the one store it needs from the lab's private S3 bucket.
