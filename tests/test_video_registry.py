@@ -262,3 +262,20 @@ def test_spatialvid_methods_entry():
     m = meta["methods"]
     assert m["text"].format(**meta) == m["text"]                       # no template fields / stray braces
     assert all({"cite", "full"} <= set(r) for r in m["refs"]) and len(m["refs"]) == 2
+
+
+def test_procthor_lossless_store_registered_for_val_unseen_only():
+    from visionlab.datasets.video_dataset import _covered_splits
+    for name in ("procthor-walks-objects", "procthor-walks-empty"):
+        st = get_config(name).stores
+        assert rank_stores(st, "lossless", "160x120", None, None) == [("lossless", "160x120", None)]
+        assert set(st[("lossless", "160x120", None)]) == {"val"}
+    # rtq-r160: val_unseen = first 400 val-folder walks; val = train-folder walks -> no lossless part
+    split = pd.DataFrame({"clip_id": ["val/h0/s0", "val/h0/s1", "val/h1/s0", "train/h9/s0"],
+                          "split": ["val_unseen", "val_unseen", "unused", "val"]})
+    lossless = {"val": "s3://x/procthor-walks-objects-lossless-160x120-val_unseen"}
+    assert store_part(lossless, split, "val_unseen").endswith("val_unseen")
+    with pytest.raises(ValueError, match="spans store parts"):
+        store_part(lossless, split, "val")
+    records = pd.DataFrame({"clip_id": ["val/h0/s0", "val/h0/s1"]})            # the partial store's walks
+    assert _covered_splits(records, split) == ["val_unseen"]

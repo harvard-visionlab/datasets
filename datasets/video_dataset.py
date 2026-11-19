@@ -433,6 +433,12 @@ def select_clips(records, split_df, split: str, subset_df, where: str | None, ch
     return df.sort_values("record_idx").reset_index(drop=True)
 
 
+def _covered_splits(records, split_df) -> list[str]:
+    """Splits of a split table whose clips are all in a store's records."""
+    have = split_df["clip_id"].isin(records["clip_id"])
+    return sorted(s for s, ok in have.groupby(split_df["split"]).all().items() if ok)
+
+
 def _store_scalars(store_dir: Path, names: tuple[str, ...]):
     """Whole-store scalar fields (`<field>.npy` written by the merge) as a DataFrame column set."""
     out = {}
@@ -510,6 +516,12 @@ def load_video(config, split: str | None = None, fmt: str | None = None, res: st
     records = pd.read_parquet(store_dir / "records.parquet")
     for n, arr in _store_scalars(store_dir, ("fps", "duration_s", "src_fps", "src_num_frames")).items():
         records[n] = np.asarray(arr)[records["record_idx"].to_numpy()]
+    if split != "all":                                # a partial store (e.g. procthor fmt="lossless") must hold the whole split
+        missing = ~split_df.loc[split_df["split"] == split, "clip_id"].isin(records["clip_id"])
+        if missing.any():
+            raise ValueError(f"{config.name}: store {store_name(remote)} holds only part of split {split!r} "
+                             f"({int(missing.sum()):,} of {len(missing):,} clips missing); it serves "
+                             f"{_covered_splits(records, split_df)} of split table {split_version!r}")
     # the split table is always joined (also for split="all"): it carries the channel / carrier / strata columns for `where`
     subset_df = None
     if subset is None:

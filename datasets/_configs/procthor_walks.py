@@ -39,7 +39,10 @@ for _name, _cell in (("procthor-walks-objects", "pt_objects_brownian"), ("procth
         name=_name,
         num_classes=0,
         # one store per source folder (train ~48 GB, val/test ~5 GB each); load() picks the one holding the split
-        stores={("h264", "160x120", None): {f: f"{S3}/{_name}/{_name}-h264-160x120-{f}" for f in ("train", "val", "test")}},
+        stores={("h264", "160x120", None): {f: f"{S3}/{_name}/{_name}-h264-160x120-{f}" for f in ("train", "val", "test")},
+                # frames byte-identical to the H5 (H.264 RGB lossless), positions/headings float64 as stored; only the
+                # rtq-r160 val_unseen walks (the tjepa-dev V3 benchmark). load(..., fmt="lossless") for other splits raises.
+                ("lossless", "160x120", None): {"val": f"{S3}/{_name}/{_name}-lossless-160x120-val_unseen"}},
         splits={"v1": f"{S3}/{_name}/splits/v1.parquet", "rtq-r160": f"{S3}/{_name}/splits/rtq-r160.parquet"},
         subsets={},
         metadata={
