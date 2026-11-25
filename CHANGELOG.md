@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.25.1] - 2026-11-24
+
+### Changed
+- slipstream range widened to `>=0.9,<0.19`, dev pin v0.18.0. 0.18.0: pinned async CPU-to-GPU copies (automatic for
+  `DecodeVideoWindow` with CPU decode and a cuda `output_device`, and for image decoders + `ToTorchImage` on cuda;
+  output byte-identical; video CUDA frames are now a fresh tensor each batch), opt-in `SlipstreamLoader(clone=True)`.
+  No API removals or changed defaults; no cache-format or cli-helper changes.
+
 ## [0.25.0] - 2026-11-19
 
 ### Added
