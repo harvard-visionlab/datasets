@@ -199,6 +199,8 @@ def plan(h: House, kind: str, T: int, rng, w_short: float | None = None) -> dict
         if wk.n < WARMUP + 1:                       # reached g0 early: keep touring
             _walk_tour(h, wk, g0, WARMUP + 1, rng)
         _truncate(wk, WARMUP + 1)
+        if not wk.ok or wk.n < WARMUP + 1:
+            return None
         A = wk.P[WARMUP].copy(); info["A"] = A.tolist()
         if kind == "turn":
             w = W_MAX if R >= math.ceil(2 * math.pi / W_MAX) else max(W_MAX, 2 * math.pi / R)

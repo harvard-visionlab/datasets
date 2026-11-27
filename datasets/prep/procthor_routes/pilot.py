@@ -70,6 +70,7 @@ def main():
         else:
             thor.reset(c, house)
         reach = thor.reachable_positions(c); t_load = time.time() - t
+        np.save(hd / "reach.npy", reach)
         t = time.time(); h = P.House(reach); t_graph = time.time() - t
         t = time.time(); wins, attempts = plan_house(h, hi, lengths, a.per); t_plan = time.time() - t
         meta = {"house_idx": hi, "n_rooms": len(house["rooms"]), "room_types": [r["roomType"] for r in house["rooms"]],
@@ -78,7 +79,6 @@ def main():
                 "timing_s": {"load": t_load, "graph": t_graph, "plan": t_plan}}
         print(f"house {hi}: rooms {meta['n_rooms']} reach {len(reach)} load {t_load:.1f}s graph {t_graph:.1f}s "
               f"plan {t_plan:.1f}s  " + " ".join(f"{k}:{v['kept']}/{v['tries']}" for k, v in attempts.items()), flush=True)
-        np.save(hd / "reach.npy", reach)
         frames = {}
         if not a.plan_only:
             for cell in ("objects", "empty"):
