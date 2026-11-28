@@ -5,6 +5,14 @@ Plan-only stage (render env, A100: AI2-THOR is needed for the reachable grids; n
         --out <dir> [--shard k/n]
 Per house: <out>/<split>/house_XXXXX/plan.npz (pos_u, psi_u [2, 1000]; pos_h, head_h) and plan.json (checks, stats).
 
+Render stage (render env, A100; after the plan report is accepted):
+    python -m procthor_routes.goalwalks render --houses-root <src> --split train --plan <plan dir> --out <render dir> \
+        [--houses 0-9999] [--shard k/n]
+Per house: <render>/<split>/house_XXXXX/seed_SSSS.npz (objects, empty uint8 [1000,120,160,3]; pos_h float64 [1000,2];
+head_h float64 [1000]) and render.json (house facts as procthor-walks metadata, per-walk mean brightness and RGB
+sums / sums of squares in [0, 1] per channel for the normalisation stats, render timing, redraw check), written last
+(resumable).
+
 Walk (one per seed 1000, 1001, as procthor-walks) = the procthor-routes goal_directed generator (plan.plan "goal" +
 _walk_tour), unchanged, run to 1000 frames: start on a node with >= 0.5 m clearance, heading toward a first goal; legs to
 goals 2-5 m geodesic away (first one within 100 deg ahead, then never straight back), smoothed shortest paths on the
@@ -305,14 +313,73 @@ def cmd_report(a) -> int:
     return 0
 
 
+def house_facts(house: dict) -> dict:
+    """The procthor-walks generator's per-house metadata fields."""
+    walls = sorted({w["material"]["name"] for w in house.get("walls", []) if (w.get("material") or {}).get("name")})
+    floors = sorted({r["floorMaterial"]["name"] for r in house["rooms"] if (r.get("floorMaterial") or {}).get("name")})
+    return {"time_of_day": thor.time_of_day(house), "skybox": house.get("proceduralParameters", {}).get("skyboxId"),
+            "n_rooms": len(house["rooms"]), "room_types": [r["roomType"] for r in house["rooms"]],
+            "n_objects": len(house["objects"]), "n_windows": len(house.get("windows", [])), "n_doors": len(house.get("doors", [])),
+            "wall_materials": walls, "floor_materials": floors}
+
+
+def cmd_render(a) -> int:
+    houses = thor.load_split(a.houses_root, a.split)
+    ids = parse_houses(a.houses) if a.houses else list(range(len(houses)))
+    if a.shard:
+        k, n = (int(x) for x in a.shard.split("/")); ids = ids[k::n]
+    c = None
+    for hi in ids:
+        pd_ = a.plan / a.split / f"house_{hi:05d}"; od = a.out / a.split / f"house_{hi:05d}"
+        if (od / "render.json").exists():
+            continue
+        pm = json.loads((pd_ / "plan.json").read_text())
+        if not all(w["ok"] for w in pm["walks"]):
+            raise RuntimeError(f"house {hi}: plan has failed walks; fix the plan first")
+        z = np.load(pd_ / "plan.npz"); seeds = [int(s_) for s_ in z["seeds"]]
+        od.mkdir(parents=True, exist_ok=True); house = houses[hi]
+        frames, meta = {}, {"house_idx": hi, "split": a.split, **house_facts(house), "timing_s": {}, "redraw_maxdiff": {}}
+        for cell in ("objects", "empty"):
+            scene = house if cell == "objects" else thor.empty_house(house)
+            t = time.time()
+            if c is None:
+                c = thor.controller(scene)
+            else:
+                thor.reset(c, scene)
+            thor.assert_agent_invisible(c, hi, cell); cam = thor.Camera(c); t_reset = time.time() - t; t = time.time()
+            for j in range(len(seeds)):
+                frames[(cell, j)] = np.stack([cam.shot(x, zz, math.degrees(q)) for (x, zz), q in zip(z["pos_u"][j], z["psi_u"][j])])
+            again = cam.shot(*z["pos_u"][0][0], math.degrees(z["psi_u"][0][0]))
+            meta["redraw_maxdiff"][cell] = int(np.abs(again.astype(int) - frames[(cell, 0)][0].astype(int)).max())
+            meta["timing_s"][cell] = {"reset": t_reset, "render": time.time() - t}
+        meta["walks"] = []
+        for j, seed in enumerate(seeds):
+            np.savez_compressed(od / f"seed_{seed}.npz", objects=frames[("objects", j)], empty=frames[("empty", j)],
+                                pos_h=z["pos_h"][j], head_h=z["head_h"][j])
+            rgb = {}
+            for cl in ("objects", "empty"):
+                f = frames[(cl, j)].reshape(-1, 3).astype(np.float64) / 255.0
+                rgb[cl] = {"n": int(len(f)), "sum": f.sum(0).tolist(), "sumsq": (f * f).sum(0).tolist()}
+            meta["walks"].append({"seed": seed, "mean_brightness": {cl: float(frames[(cl, j)].mean()) for cl in ("objects", "empty")},
+                                  "rgb": rgb})
+        tmp = od / "render.json.tmp"; tmp.write_text(json.dumps(meta, indent=1)); tmp.replace(od / "render.json")
+        tm = meta["timing_s"]
+        print(f"house {hi}: {len(seeds)} walks, objects {tm['objects']['render']:.0f}s empty {tm['empty']['render']:.0f}s "
+              f"redraw {meta['redraw_maxdiff']}", flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("plan"); p.add_argument("--houses-root", type=Path, required=True); p.add_argument("--split", required=True)
     p.add_argument("--houses", required=True); p.add_argument("--out", type=Path, required=True); p.add_argument("--shard", default="")
     r = sub.add_parser("report"); r.add_argument("--out", type=Path, required=True); r.add_argument("--split", required=True)
+    d = sub.add_parser("render"); d.add_argument("--houses-root", type=Path, required=True); d.add_argument("--split", required=True)
+    d.add_argument("--plan", type=Path, required=True); d.add_argument("--out", type=Path, required=True)
+    d.add_argument("--houses", default=""); d.add_argument("--shard", default="")
     a = ap.parse_args(argv)
-    return {"plan": cmd_plan, "report": cmd_report}[a.cmd](a)
+    return {"plan": cmd_plan, "report": cmd_report, "render": cmd_render}[a.cmd](a)
 
 
 if __name__ == "__main__":
