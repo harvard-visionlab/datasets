@@ -6,3 +6,4 @@ from . import imagenet10
 from . import imagenette
 from . import spatialvid_hq
 from . import procthor_walks
+from . import procthor_routes
