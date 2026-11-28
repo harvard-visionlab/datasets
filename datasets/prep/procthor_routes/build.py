@@ -61,7 +61,7 @@ def records(render: Path, split: str) -> pd.DataFrame:
         for w in m["windows"]:
             if w["kind"] not in ROUTE:
                 continue
-            sub = f"{ROUTE[w['kind']]}_{w['T']}"; info = w["info"]
+            sub = f"{ROUTE[w['kind']]}_{w['T']}"; info = w["info"]; w["k"] = int(w["name"].rsplit("_", 1)[1])
             ev = EVENT.get(w["kind"])
             rows.append(dict(clip_id=f"{split}/house_{m['house_idx']:05d}/{sub}_{w['k']}", split=split, subset=sub,
                              route=ROUTE[w["kind"]], window_frames=int(w["T"]), house_idx=int(m["house_idx"]), k=int(w["k"]),
