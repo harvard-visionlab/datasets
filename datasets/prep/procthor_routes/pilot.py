@@ -1,7 +1,8 @@
 """Pilot: plan + render route windows for a few val houses, both cells on identical paths. Render venv.
 
     cd datasets/prep && python -m procthor_routes.pilot --houses-root <procthor10k dir> --out <dir> \
-        [--houses 3,17,...] [--per 5] [--lengths 61,121] [--types goal,...] [--plan-only]
+        [--houses 3,17,...] [--per 5] [--lengths 61,121] [--types goal,...] [--plan-only] [--shard k/n]
+Houses as '3,17' or '0-199'. Resumable: a house with house.json is skipped (written last, atomically).
 
 Per house: <out>/house_XXXXX/<type>_<T>_<k>.npz (objects, empty uint8 [T+4,120,160,3]; pos_h float64 [T+4,2];
 head_h float64 [T+4]; pos_u, psi_u) and house.json (windows: info + metrics; attempts per (type, T); timings).
@@ -57,14 +58,20 @@ def main():
     ap.add_argument("--lengths", default="61,121")
     ap.add_argument("--types", default=",".join(P.TYPES))
     ap.add_argument("--plan-only", action="store_true")
+    ap.add_argument("--shard", default="", help="k/n: this process takes houses[k::n] (resumable: finished houses skipped)")
     a = ap.parse_args()
     val = thor.load_split(a.houses_root, "val")
     lengths = [int(x) for x in a.lengths.split(",")]
-    houses = [int(x) for x in a.houses.split(",")] if a.houses else pick_houses(val)
+    houses = parse_houses(a.houses) if a.houses else pick_houses(val)
+    if a.shard:
+        k, n = (int(x) for x in a.shard.split("/")); houses = houses[k::n]
     print("houses", houses, flush=True)
     c = None; summary = []
     for hi in houses:
-        house = val[hi]; hd = a.out / f"house_{hi:05d}"; hd.mkdir(parents=True, exist_ok=True)
+        house = val[hi]; hd = a.out / f"house_{hi:05d}"
+        if (hd / "house.json").exists():                 # house.json is written last: the house is complete
+            print(f"house {hi}: done, skipped", flush=True); continue
+        hd.mkdir(parents=True, exist_ok=True)
         t = time.time()
         if c is None:
             c = thor.controller(house)
@@ -107,11 +114,21 @@ def main():
                 np.savez_compressed(hd / f"{name}.npz", pos_h=pos_h, head_h=head_h, pos_u=w["pos_u"], psi_u=w["psi_u"])
             out_w.append({"name": name, "kind": w["kind"], "T": w["T"], "seed": w["seed"], "info": w["info"], "metrics": w["metrics"]})
         meta["windows"] = out_w
-        (hd / "house.json").write_text(json.dumps(meta, indent=1, default=float))
+        tmp = hd / "house.json.tmp"; tmp.write_text(json.dumps(meta, indent=1, default=float)); tmp.replace(hd / "house.json")
         summary.append(meta)
     if c is not None:
         c.stop()
-    (a.out / "summary.json").write_text(json.dumps(summary, indent=1, default=float))
+    tag = a.shard.replace("/", "of") if a.shard else "all"
+    (a.out / f"summary_{tag}.json").write_text(json.dumps(summary, indent=1, default=float))
+
+
+def parse_houses(s: str) -> list[int]:
+    """'3,17' or '0-199' (inclusive) or a mix."""
+    out = []
+    for part in s.split(","):
+        lo, _, hi = part.partition("-")
+        out += list(range(int(lo), int(hi) + 1)) if hi else [int(lo)]
+    return out
 
 
 def pick_houses(val, k=5):
