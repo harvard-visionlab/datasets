@@ -10,7 +10,7 @@ names as procthor-walks. datasets env (slipstream, av, torchcodec).
 
 index: <W>/<dataset>/index/walks.parquet (one row per walk, store order: folder train/val/test, house, seed; clip_id
 `<folder>/house_XXXXX/seed_SSSS` as procthor-walks), splits/v1.parquet (folder) and splits/rtq-r160.parquet (procthor-walks'
-table, same clip_ids, copied after checking the clip_id sets are equal). Columns: procthor-walks' (house facts, camera,
+table, same clip_ids, minus the walks that could not be planned; listed in splits/dropped.json). Columns: procthor-walks' (house facts, camera,
 mean_brightness, ...; motion = "goal_directed", step_std / angle_std = NaN) plus walkable_m2, goal_min_m, goals, legs,
 replans, uturns, fixes, path_m, door_crossings.
 encode: one store per (cell, folder) `procthor-goalwalks-<cell>-h264-160x120-<folder>`: video (procthor_walks.common.encode_walk:
@@ -65,7 +65,10 @@ def cmd_index(a) -> int:
             hi = rm["house_idx"]
             polys = [np.array([[p["x"], p["z"]] for p in r["floorPolygon"]], float) for r in houses[hi]["rooms"]]
             plan = np.load(a.plan / folder / hd.name / "plan.npz")
-            for j, (pw, rw) in enumerate(zip(pm["walks"], rm["walks"], strict=True)):
+            if rm.get("dropped"):
+                continue
+            ok_walks = [w for w in pm["walks"] if w["ok"]]                # unplannable walks are dropped (listed in the card)
+            for j, (pw, rw) in enumerate(zip(ok_walks, rm["walks"], strict=True)):
                 assert pw["seed"] == rw["seed"] == int(plan["seeds"][j])
                 ck, st = pw["check"], pw["stats"]
                 base = dict(clip_id=f"{folder}/{hd.name}/seed_{pw['seed']}", folder=folder, house=hd.name, seed=int(pw["seed"]),
@@ -92,10 +95,14 @@ def cmd_index(a) -> int:
         out = a.work / dataset(c); (out / "index").mkdir(parents=True, exist_ok=True); (out / "splits").mkdir(exist_ok=True)
         df.to_parquet(out / "index" / "walks.parquet", index=False)
         df[["clip_id"]].assign(split=df["folder"]).to_parquet(out / "splits" / "v1.parquet", index=False)
-        if set(rtq["clip_id"]) != set(df["clip_id"]):
-            sys.exit(f"{dataset(c)}: clip_ids differ from procthor-walks rtq-r160 "
-                     f"({len(set(rtq['clip_id']) - set(df['clip_id']))} missing, {len(set(df['clip_id']) - set(rtq['clip_id']))} extra)")
+        extra = set(df["clip_id"]) - set(rtq["clip_id"]); missing = sorted(set(rtq["clip_id"]) - set(df["clip_id"]))
+        if extra:
+            sys.exit(f"{dataset(c)}: {len(extra)} clip_ids not in procthor-walks rtq-r160")
         rtq.set_index("clip_id").loc[df["clip_id"]].reset_index().to_parquet(out / "splits" / "rtq-r160.parquet", index=False)
+        dropped = rtq[rtq["clip_id"].isin(missing)]
+        (out / "splits" / "dropped.json").write_text(json.dumps(dropped.to_dict("records"), indent=1))
+        print(f"{dataset(c)}: {len(missing)} procthor-walks clips dropped (unplannable); their rtq-r160 splits "
+              f"{dropped['split'].value_counts().to_dict()}", flush=True)
         print(f"{dataset(c)}: {len(df)} walks; splits v1 + rtq-r160 (copied from procthor-walks)", flush=True)
     return 0
 

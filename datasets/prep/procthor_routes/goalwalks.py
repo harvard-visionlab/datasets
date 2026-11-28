@@ -334,10 +334,11 @@ def cmd_render(a) -> int:
         if (od / "render.json").exists():
             continue
         pm = json.loads((pd_ / "plan.json").read_text())
-        if not all(w["ok"] for w in pm["walks"]):
-            raise RuntimeError(f"house {hi}: plan has failed walks; fix the plan first")
-        z = np.load(pd_ / "plan.npz"); seeds = [int(s_) for s_ in z["seeds"]]
         od.mkdir(parents=True, exist_ok=True); house = houses[hi]
+        if not any(w["ok"] for w in pm["walks"]):          # unplannable house (George 2026-11-28: dropped, listed in the card)
+            (od / "render.json").write_text(json.dumps({"house_idx": hi, "split": a.split, "walks": [], "dropped": True}))
+            print(f"house {hi}: no plannable walk, skipped", flush=True); continue
+        z = np.load(pd_ / "plan.npz"); seeds = [int(s_) for s_ in z["seeds"]]      # ok walks only
         frames, meta = {}, {"house_idx": hi, "split": a.split, **house_facts(house), "timing_s": {}, "redraw_maxdiff": {}}
         for cell in ("objects", "empty"):
             scene = house if cell == "objects" else thor.empty_house(house)
