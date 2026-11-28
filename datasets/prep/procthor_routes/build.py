@@ -177,12 +177,12 @@ def cmd_store(a) -> int:
                   render=str(a.render), subsets=rec["subset"].value_counts().sort_index().to_dict(), encode=ENCODE,
                   fields=Source([], a.cell, store).field_types, software=software_versions(), video_bytes=vbytes,
                   encode_seconds=round(time.perf_counter() - t), built=time.strftime("%Y-%m-%dT%H:%M:%S"))
-        (store / "store_manifest.json").write_text(json.dumps(sm, indent=1))
+        (store / "store_manifest.json").write_text(json.dumps(sm, indent=1, default=int))
         print(f"BUILT {name}: {len(rec)} records, video {vbytes / 1e9:.2f} GB", flush=True)
     v = verify(store, pd.read_parquet(store / "records.parquet"), a.cell, a.workers)
     sm = json.loads((store / "store_manifest.json").read_text()); sm["verify"] = v
-    (store / "store_manifest.json").write_text(json.dumps(sm, indent=1))
-    print("VERIFY " + ("OK " if v["ok"] else "FAILED ") + json.dumps(v), flush=True)
+    (store / "store_manifest.json").write_text(json.dumps(sm, indent=1, default=int))
+    print("VERIFY " + ("OK " if v["ok"] else "FAILED ") + json.dumps(v, default=int), flush=True)
     return 0 if v["ok"] else 1
 
 
