@@ -111,7 +111,9 @@ class Camera:
                     fieldOfView=VFOV)
         self.id = len(ev.third_party_camera_frames) - 1
 
-    def shot(self, x_u, z_u, yaw_u_deg) -> np.ndarray:
+    def shot(self, x_u, z_u, yaw_u_deg, y=CAM_H, pitch_deg=0.0, roll_deg=0.0) -> np.ndarray:
+        """Defaults = the training camera. pitch > 0 looks down, roll > 0 tilts (Unity x / z rotations); used by gait.py."""
         ev = self.c.step(action="UpdateThirdPartyCamera", thirdPartyCameraId=self.id,
-                         position=dict(x=float(x_u), y=CAM_H, z=float(z_u)), rotation=dict(x=0, y=float(yaw_u_deg), z=0))
+                         position=dict(x=float(x_u), y=float(y), z=float(z_u)),
+                         rotation=dict(x=float(pitch_deg), y=float(yaw_u_deg), z=float(roll_deg)))
         return ev.third_party_camera_frames[self.id][..., :3].copy()
