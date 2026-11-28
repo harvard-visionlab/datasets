@@ -13,6 +13,8 @@ turn <= 0.15 rad/frame, slowing to 0.3x while the heading error is large; at a g
 up to 0.20 m off the grid are pulled back to 0.12 m (counted, as in routes). The one extension: a leg with a step
 farther off (where the 61/121 generator discarded the whole window) is rolled back to its start and a new goal drawn
 (a "replan"); 30 failed legs in a row restart the walk (next try, counted). Seeded [split, house, seed, try].
+A walk that cannot be made with 2 m goals (all MAX_TRIES fail; tiny floors) is planned with 1 m goals (goal_min_m
+in plan.json; George 2026-11-28), so every house keeps its 2 walks. Walks with > 10 replans are redrawn.
 
 Checks (every frame / step; a walk is kept only if all pass):
   furnished   every frame on the furnished reachable set (within 0.13 m of a grid point, or inside a cell with 4
@@ -33,8 +35,8 @@ Degeneracy metrics per walk (windows = frames 0, 60, ..., 900, 61 frames each, a
   disp_min_m     min over windows of net displacement
   frac_near_wall frames whose nearest grid node has < 0.35 m clearance (the walkable floor's edge)
   uturns         goals whose next leg starts > 135 deg from the arrival heading
-Proposed REJECT rule, report-only for now (`would_reject` per walk; not applied): replans > 10, straight_min < 0.25,
-frac_near_wall > 0.15, frac_slow > 0.35.
+Gate: replans > MAX_REPLANS (10) -> redrawn. The other metrics are reported only (`would_reject` keeps the first draft's
+fixed thresholds for reference; the approved generator exceeds them routinely: slow-downs at turns, turnarounds at goals).
 """
 from __future__ import annotations
 
@@ -55,6 +57,8 @@ SEEDS = (1000, 1001)
 SPLIT_CODE = {"train": 0, "val": 1, "test": 2}
 MAX_LEG_FAILS, MAX_TRIES = 30, 20
 OBJ_MARGIN = 0.10
+MAX_REPLANS = 10
+GOAL_MIN = (2.0, 1.0)            # goal distance floor: 2 m, or 1 m where no 2 m walk exists
 REJECT = {"replans": 10, "straight_min": 0.25, "frac_near_wall": 0.15, "frac_slow": 0.35}
 
 
@@ -68,18 +72,18 @@ class Grid:
     valid = P.House.valid
 
 
-def walk(h: P.House, rng) -> tuple[dict | None, dict]:
+def walk(h: P.House, rng, lo: float = 2.0) -> tuple[dict | None, dict]:
     st = {"legs": 0, "goals": 0, "replans": 0, "uturns": 0}
     i0 = int(rng.choice(np.where(h.clear >= 0.5)[0] if (h.clear >= 0.5).any() else np.arange(len(h.reach))))
-    g0 = P._goal_from(h, i0, rng)
+    g0 = P._goal_from(h, i0, rng, lo=lo)
     if g0 is None:
         return None, st | {"fail": "no_first_goal"}
     sp = P.smooth(h.path(i0, g0)); wk = P.Walker(h, h.reach[i0], math.atan2(*(sp[min(3, len(sp) - 1)] - sp[0])))
     cur, last, fails, goals_at = h.node(wk.p), None, 0, []
     while wk.n < N:
-        g = P._goal_from(h, cur, rng, away_from=last, ahead=(wk.p, wk.psi, math.radians(100)) if st["goals"] == 0 and st["legs"] == 0 else None)
+        g = P._goal_from(h, cur, rng, lo=lo, away_from=last, ahead=(wk.p, wk.psi, math.radians(100)) if st["goals"] == 0 and st["legs"] == 0 else None)
         if g is None:
-            g = P._goal_from(h, cur, rng, away_from=last)
+            g = P._goal_from(h, cur, rng, lo=lo, away_from=last)
         if g is None:
             return None, st | {"fail": "no_goal"}
         save = (len(wk.P), wk.p.copy(), wk.psi, wk.fixes)
@@ -193,23 +197,29 @@ def cmd_plan(a) -> int:
         np.save(hd / "reach.npy", reach); np.save(hd / "reach_empty.npy", empty.reach)
         h = P.House(reach); t_graph = time.time() - t
         walks, meta = [], {"house_idx": hi, "split": a.split, "n_rooms": len(house["rooms"]), "n_objects": len(house["objects"]),
-                           "n_reachable": len(reach), "n_reachable_empty": len(empty.reach), "n_boxes": len(bx), "walks": []}
+                           "n_reachable": len(reach), "walkable_m2": len(reach) * P.GRID ** 2, "n_reachable_empty": len(empty.reach), "n_boxes": len(bx), "walks": []}
         t = time.time()
         for seed in SEEDS:
-            tries, rec = 0, {"seed": seed, "fails": []}
-            while tries < MAX_TRIES:
-                rng = np.random.default_rng([SPLIT_CODE[a.split], hi, seed, tries]); tries += 1
-                w, st = walk(h, rng)
-                if w is None:
-                    rec["fails"].append(st); continue
-                ck = check(w, h, empty, bx)
-                if not ck["ok"]:
-                    rec["fails"].append(st | {"fail": "check", "check": ck}); continue
-                rec["would_reject"] = degenerate(ck, st)
-                rec |= {"tries": tries, "stats": st, "check": ck}; walks.append(w); break
-            else:
-                rec["tries"] = tries
-            rec["ok"] = "check" in rec and rec["check"]["ok"]
+            for lo in GOAL_MIN:
+                tries, rec = 0, {"seed": seed, "goal_min_m": lo, "fails": []}
+                while tries < MAX_TRIES:
+                    rng = np.random.default_rng([SPLIT_CODE[a.split], hi, seed, tries] + ([] if lo == GOAL_MIN[0] else [1]))
+                    tries += 1
+                    w, st = walk(h, rng, lo)
+                    if w is None:
+                        rec["fails"].append(st); continue
+                    if st["replans"] > MAX_REPLANS:
+                        rec["fails"].append(st | {"fail": "replans"}); continue
+                    ck = check(w, h, empty, bx)
+                    if not ck["ok"]:
+                        rec["fails"].append(st | {"fail": "check", "check": ck}); continue
+                    rec["would_reject"] = degenerate(ck, st)
+                    rec |= {"tries": tries, "stats": st, "check": ck}; walks.append(w); break
+                else:
+                    rec["tries"] = tries
+                rec["ok"] = "check" in rec and rec["check"]["ok"]
+                if rec["ok"]:
+                    break
             meta["walks"].append(rec)
         meta["timing_s"] = {"load": t_load, "graph": t_graph, "plan": time.time() - t}
         if walks:
@@ -263,6 +273,8 @@ def cmd_report(a) -> int:
     rep = {"houses": len(rows), "walks": len(W), "walks_ok": len(ok),
            "houses_all_ok": sum(all(w["ok"] for w in m["walks"]) for m in rows),
            "one_room_houses": sum(m["n_rooms"] == 1 for m in rows),
+           "walks_1m_goals": sum(w.get("goal_min_m") == GOAL_MIN[1] for _, w in ok),
+           "houses_lt_6.25m2": sum(m["walkable_m2"] < 6.25 for m in rows),
            "tries_hist": np.bincount([w["tries"] for _, w in ok]).tolist() if ok else [],
            "failed_tries_by_reason": fails,
            "would_reject": {"any": sum(bool(w["would_reject"]) for _, w in ok),
