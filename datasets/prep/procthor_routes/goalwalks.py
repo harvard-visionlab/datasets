@@ -143,8 +143,9 @@ def check(w: dict, h: P.House, empty: Grid, bx: np.ndarray) -> dict:
     od = box_dist(p, bx)
     c = {"furnished_bad": int((~h.valid(p)).sum()), "empty_bad": int((~empty.valid(p)).sum()),
          "seg_bad": int((~h.valid(sub)).sum()), "seg_max_off_m": float(off(h, sub).max()),
-         "object_bad": int((od < OBJ_MARGIN).sum()), "min_object_dist_m": float(od.min()),
-         "step_bad": int((step > P.V + 1e-9).sum()), "turn_bad": int((turn > P.W_MAX + 1e-9).sum()),
+         "object_bad": int((od <= 0).sum()), "object_near": int((od < OBJ_MARGIN).sum()), "min_object_dist_m": float(od.min()),
+         "step_bad": int((step > P.FIX_MAX + 1e-9).sum()), "steps_over_v": int((step > P.V + 1e-9).sum()),
+         "max_step_m": float(step.max()), "turn_bad": int((turn > P.W_MAX + 1e-9).sum()),
          "finite": bool(np.isfinite(p).all() and np.isfinite(psi).all()), "n": int(len(p))}
     c["ok"] = c["n"] == N and c["finite"] and not any(c[k] for k in ("furnished_bad", "empty_bad", "object_bad", "step_bad", "turn_bad"))
     win = [(s0, s0 + 60) for s0 in range(0, N - 60, 60)]
@@ -266,7 +267,7 @@ def cmd_report(a) -> int:
            "failed_tries_by_reason": fails,
            "would_reject": {"any": sum(bool(w["would_reject"]) for _, w in ok),
                             **{k: sum(k in w["would_reject"] for _, w in ok) for k in REJECT}},
-           "kept_walks": {k: _q(ck(k)) for k in ("seg_bad", "seg_max_off_m", "path_m", "frac_slow", "straight_min", "straight_median", "disp_min_m",
+           "kept_walks": {k: _q(ck(k)) for k in ("seg_bad", "seg_max_off_m", "object_near", "steps_over_v", "max_step_m", "path_m", "frac_slow", "straight_min", "straight_median", "disp_min_m",
                                                   "frac_near_wall", "min_object_dist_m", "max_disp_m", "mean_abs_turn")}
            | {k: _q(st(k)) for k in ("replans", "legs", "goals", "uturns", "fixes")},
            "plan_s_median": float(np.median([m["timing_s"]["plan"] for m in rows])),
