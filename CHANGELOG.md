@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.26.1] - 2026-11-28
+
+### Added
+- procthor-routes-objects / -empty records: `door_crossings` (room changes over the clip, from the house floor
+  polygons; doors and open archways), `door_crossings_rollout` (frame >= 20), `rooms_visited`. Data unchanged; only
+  records.parquet / store_manifest.json were republished. Existing local caches keep the old table until
+  `visionlab-datasets sync <name> val --deep` (a plain sync checks the manifest only). Prep: `build.py records`.
+
 ## [0.26.0] - 2026-11-28
 
 ### Added
