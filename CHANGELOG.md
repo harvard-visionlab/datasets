@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.26.0] - 2026-11-28
+
+### Added
+- procthor-routes-objects / -empty: scripted camera routes through the 200 ProcTHOR val houses of procthor-walks'
+  val_unseen, furnished and empty on identical paths, rendered with the procthor-walks camera (AI2-THOR 5.0.0,
+  160x120, Kempner A100). `load(name, split="val", subset="<route>_<T>")`, 14 subsets: goal_directed, full_turn,
+  out_and_back, loop, brownian, brownian_inertia80, brownian_inertia95 x T = 61 / 121 (20 warm-up + rollout + 1
+  target); 13,602 clips per dataset. One lossless store per dataset (`-lossless-160x120-val`, 18.0 / 15.6 GB):
+  H.264 RGB lossless frames (T + 4 per clip, so `eval_windows(T, rate_hz=30)` gives one window from frame 0),
+  float64 positions/headings NaN-padded to 125, route/event columns in records. Every clip verified (all frames,
+  eval window, poses byte-identical; cross-cell pairing identical). Normalisation = procthor-walks stats. Card
+  `cards/procthor-routes.md`; prep `prep/procthor_routes/` (planner, renderer port, render-equivalence check, build,
+  publish). Private S3, lab_storage master, shared netscratch.
+
+### Changed
+- Dev pin slipstream v0.18.1 (frees pinned memory at exit); range unchanged (`>=0.9,<0.19`).
+
 ## [0.25.1] - 2026-11-24
 
 ### Changed
