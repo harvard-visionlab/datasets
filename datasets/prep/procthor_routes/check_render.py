@@ -60,7 +60,10 @@ def training_motion_stats(pos: np.ndarray, head: np.ndarray) -> dict:
             "n_steps": int(step.size)}
 
 
-def compare(ref: Path, houses_root: Path, out_json: Path | None):
+def compare(ref: Path, houses_root: Path, out_json: Path | None, sequential: bool = False, gen_root: Path | None = None):
+    """sequential: render every pose 0..999 in order (as the generator walks) and compare at the dumped frames;
+    gen_root: also diff all 1000 frames against generator H5s re-rendered on this machine
+    (<gen_root>/pt_<cell>_brownian/val/house_XXXXX/seed_K.h5)."""
     from . import thor
     z = np.load(ref)
     val = thor.load_split(houses_root, "val")
@@ -78,9 +81,24 @@ def compare(ref: Path, houses_root: Path, out_json: Path | None):
                 thor.reset(c, scene)
             thor.assert_agent_invisible(c, hi, cell)
             cam = thor.Camera(c)
-            for k, fi in enumerate(z["frames_idx"]):
-                x, zz, yaw = thor.from_habitat(*z[f"{cell}_pos"][w, fi], z[f"{cell}_head"][w, fi])
-                img = cam.shot(x, zz, yaw)
+            idx = list(z["frames_idx"])
+            seq = {}
+            if sequential or gen_root:
+                for fi in range(len(z[f"{cell}_pos"][w])):
+                    seq[fi] = cam.shot(*thor.from_habitat(*z[f"{cell}_pos"][w, fi], z[f"{cell}_head"][w, fi]))
+            if gen_root:
+                import h5py
+                _, hh, ss = str(cid).split("/")
+                with h5py.File(gen_root / f"pt_{cell}_brownian" / "val" / hh / f"{ss}.h5") as H:
+                    g = H["trajectory/visual_scenes"][:]
+                a = np.stack([seq[i] for i in range(len(g))]); d = np.abs(a.astype(int) - g.astype(int))
+                fm = d.reshape(len(d), -1).max(1)
+                print(f"{cell:7s} {cid} port-vs-generator, all {len(d)} frames: identical frames {int((fm == 0).sum())}, "
+                      f"max<=1 {int((fm <= 1).sum())}, max {int(fm.max())}, mean {d.mean():.5f}", flush=True)
+                rep.setdefault("vs_gen", []).append(dict(cell=cell, clip=str(cid), identical=int((fm == 0).sum()),
+                                                         le1=int((fm <= 1).sum()), max=int(fm.max()), mean=float(d.mean())))
+            for k, fi in enumerate(idx):
+                img = seq[fi] if seq else cam.shot(*thor.from_habitat(*z[f"{cell}_pos"][w, fi], z[f"{cell}_head"][w, fi]))
                 d = np.abs(img.astype(int) - z[f"{cell}_frames"][w, k].astype(int))
                 worst = max(worst, int(d.max()))
                 rep["frames"].append(dict(cell=cell, clip=str(cid), frame=int(fi), max=int(d.max()), mean=float(d.mean()),
@@ -101,11 +119,12 @@ def main():
     d.add_argument("--walks", type=int, default=6)
     c = sub.add_parser("compare"); c.add_argument("--ref", type=Path, required=True); c.add_argument("--houses-root", type=Path, required=True)
     c.add_argument("--out-json", type=Path)
+    c.add_argument("--sequential", action="store_true"); c.add_argument("--gen-root", type=Path)
     a = ap.parse_args()
     if a.cmd == "dump":
         dump(a.store_root, a.out, a.walks)
     else:
-        compare(a.ref, a.houses_root, a.out_json)
+        compare(a.ref, a.houses_root, a.out_json, a.sequential, a.gen_root)
 
 
 if __name__ == "__main__":
