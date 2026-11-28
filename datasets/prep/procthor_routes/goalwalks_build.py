@@ -60,6 +60,8 @@ def cmd_index(a) -> int:
         for hd in sorted((a.render / folder).glob("house_*")):
             rj = hd / "render.json"
             if not rj.exists():
+                if a.partial:
+                    continue
                 sys.exit(f"{hd}: not rendered")
             rm = json.loads(rj.read_text()); pm = json.loads((a.plan / folder / hd.name / "plan.json").read_text())
             hi = rm["house_idx"]
@@ -90,6 +92,8 @@ def cmd_index(a) -> int:
                                                env_name=f"procthor10k_{folder}_{hi:05d}_goalwalks_{c}"))
         print(f"{folder}: {sum(r['folder'] == folder for r in rows['objects'])} walks", flush=True)
     rtq = pd.read_parquet(WALKS_RTQ)
+    if a.partial:                                     # dry runs on a partial render: rtq-r160 restricted to what exists
+        rtq = rtq[rtq["clip_id"].isin({r["clip_id"] for r in rows["objects"]}) | ~rtq["clip_id"].str.startswith(FOLDERS)]
     for c in CELLS:
         df = pd.DataFrame(rows[c]); df.insert(0, "record_idx", range(len(df)))
         out = a.work / dataset(c); (out / "index").mkdir(parents=True, exist_ok=True); (out / "splits").mkdir(exist_ok=True)
@@ -288,6 +292,7 @@ def main(argv=None) -> int:
     i = sub.add_parser("index")
     for k in ("plan", "render", "houses-root", "work"):
         i.add_argument(f"--{k}", type=Path, required=True)
+    i.add_argument("--partial", action="store_true", help="dry run: skip houses not rendered yet")
     for name in ("encode", "verify", "publish"):
         p = sub.add_parser(name); p.add_argument("--work", type=Path, required=True); p.add_argument("--cell", choices=CELLS, required=True)
         p.add_argument("--folder", choices=FOLDERS, required=True); p.add_argument("--store-root", type=Path, required=True)
