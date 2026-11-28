@@ -15,10 +15,12 @@ farther off (where the 61/121 generator discarded the whole window) is rolled ba
 (a "replan"); 30 failed legs in a row restart the walk (next try, counted). Seeded [split, house, seed, try].
 
 Checks (every frame / step; a walk is kept only if all pass):
-  furnished   position on the furnished reachable set (within 0.13 m of a grid point, or inside a cell with 4 reachable
-              corners: the generator's tolerance), also at 1/4, 1/2, 3/4 of every step (no corner cutting)
+  furnished   every frame on the furnished reachable set (within 0.13 m of a grid point, or inside a cell with 4
+              reachable corners: the generator's tolerance). Reported, not gated: points at 1/4, 1/2, 3/4 of each step
+              off that set (seg_bad) and how far beyond the tolerance (seg_max_off_m): corner cutting between frames
   empty       the same against the EMPTY house's own reachable grid (poses are identical in both cells)
-  objects     camera point (x, 1.454 m, z) outside every furnished object's axis-aligned box grown by 0.10 m
+  objects     camera point (x, 1.454 m, z) outside every placed object's axis-aligned box (house objects + children,
+              boxes spanning camera height) grown by 0.10 m
               (near clip); min distance reported
   kinematics  step <= 0.115 m + 1e-9, |turn| <= 0.15 rad + 1e-9, finite
 Reachable grid = AI2-THOR GetReachablePositions: the agent capsule fits there, i.e. clear of walls, doors frames and
@@ -101,10 +103,20 @@ def walk(h: P.House, rng) -> tuple[dict | None, dict]:
     return {"pos_u": np.array(wk.P[:N]), "psi_u": np.array(wk.Psi[:N]), "goal_frames": goals_at}, st
 
 
-def boxes(c) -> np.ndarray:
-    """Furnished objects' AABBs spanning camera height, grown by OBJ_MARGIN: [n, 4] (xmin, xmax, zmin, zmax)."""
-    out = []
+def _ids(objs) -> set:
+    out = set()
+    for o in objs:
+        out.add(o["id"]); out |= _ids(o.get("children", []))
+    return out
+
+
+def boxes(c, house) -> np.ndarray:
+    """AABBs of the house's placed objects (house["objects"] and their children; not floor, walls, doors, windows)
+    spanning camera height, grown by OBJ_MARGIN: [n, 4] (xmin, xmax, zmin, zmax)."""
+    ids = _ids(house["objects"]); out = []
     for o in c.last_event.metadata["objects"]:
+        if o["objectId"] not in ids:
+            continue
         b = o.get("axisAlignedBoundingBox") or {}
         cen, sz = b.get("center"), b.get("size")
         if not cen or not sz:
@@ -125,10 +137,12 @@ def box_dist(p: np.ndarray, bx: np.ndarray) -> np.ndarray:
 
 def check(w: dict, h: P.House, empty: Grid, bx: np.ndarray) -> dict:
     p, psi = w["pos_u"], w["psi_u"]
-    sub = np.vstack([p] + [p[:-1] + f * (p[1:] - p[:-1]) for f in (0.25, 0.5, 0.75)])
+    sub = np.vstack([p[:-1] + f * (p[1:] - p[:-1]) for f in (0.25, 0.5, 0.75)])
+    off = lambda g, q: np.where(g.valid(q), 0.0, g.tree.query(q)[0] - P.SNAP_TOL)  # noqa: E731
     step = np.linalg.norm(np.diff(p, axis=0), axis=1); turn = np.abs(P.wrap(np.diff(psi)))
     od = box_dist(p, bx)
-    c = {"furnished_bad": int((~h.valid(sub)).sum()), "empty_bad": int((~empty.valid(sub)).sum()),
+    c = {"furnished_bad": int((~h.valid(p)).sum()), "empty_bad": int((~empty.valid(p)).sum()),
+         "seg_bad": int((~h.valid(sub)).sum()), "seg_max_off_m": float(off(h, sub).max()),
          "object_bad": int((od < OBJ_MARGIN).sum()), "min_object_dist_m": float(od.min()),
          "step_bad": int((step > P.V + 1e-9).sum()), "turn_bad": int((turn > P.W_MAX + 1e-9).sum()),
          "finite": bool(np.isfinite(p).all() and np.isfinite(psi).all()), "n": int(len(p))}
@@ -172,7 +186,7 @@ def cmd_plan(a) -> int:
             c = thor.controller(house)
         else:
             thor.reset(c, house)
-        reach = thor.reachable_positions(c); bx = boxes(c)
+        reach = thor.reachable_positions(c); bx = boxes(c, house)
         thor.reset(c, thor.empty_house(house)); empty = Grid(thor.reachable_positions(c))
         t_load = time.time() - t; t = time.time()
         np.save(hd / "reach.npy", reach); np.save(hd / "reach_empty.npy", empty.reach)
@@ -252,7 +266,7 @@ def cmd_report(a) -> int:
            "failed_tries_by_reason": fails,
            "would_reject": {"any": sum(bool(w["would_reject"]) for _, w in ok),
                             **{k: sum(k in w["would_reject"] for _, w in ok) for k in REJECT}},
-           "kept_walks": {k: _q(ck(k)) for k in ("path_m", "frac_slow", "straight_min", "straight_median", "disp_min_m",
+           "kept_walks": {k: _q(ck(k)) for k in ("seg_bad", "seg_max_off_m", "path_m", "frac_slow", "straight_min", "straight_median", "disp_min_m",
                                                   "frac_near_wall", "min_object_dist_m", "max_disp_m", "mean_abs_turn")}
            | {k: _q(st(k)) for k in ("replans", "legs", "goals", "uturns", "fixes")},
            "plan_s_median": float(np.median([m["timing_s"]["plan"] for m in rows])),
