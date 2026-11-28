@@ -1,7 +1,7 @@
 """Pilot figures: per-house trajectory sheets (PNG) and per-route GIFs (objects | empty | top-down map). Render venv
 (+ matplotlib, pillow).
 
-    cd datasets/prep && python -m procthor_routes.viz --pilot <dir> --out <dir> [--gif-house 42]
+    cd datasets/prep && python -m procthor_routes.viz --pilot <dir> --out <dir> [--gif-houses 42,176]
 """
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ import numpy as np
 
 from . import plan as P
 
-COL = {"goal": "#1f77b4", "turn": "#d62728", "outback": "#2ca02c", "loop": "#9467bd", "brownian": "#7f7f7f"}
+COL = {"goal": "#1f77b4", "turn": "#d62728", "outback": "#2ca02c", "loop": "#9467bd", "brownian": "#7f7f7f",
+       "brownian_inertia80": "#ff7f0e", "brownian_inertia90": "#e377c2", "brownian_inertia95": "#17becf"}
 
 
 def sheet(hd: Path, out: Path):
@@ -22,9 +23,10 @@ def sheet(hd: Path, out: Path):
     import matplotlib.pyplot as plt
     meta = json.loads((hd / "house.json").read_text()); reach = np.load(hd / "reach.npy")
     lengths = sorted({w["T"] for w in meta["windows"]})
-    fig, axs = plt.subplots(len(lengths), len(P.TYPES), figsize=(3.2 * len(P.TYPES), 3.3 * len(lengths)), squeeze=False)
+    kinds = [k for k in P.TYPES if any(w["kind"] == k for w in meta["windows"])]
+    fig, axs = plt.subplots(len(lengths), len(kinds), figsize=(3.2 * len(kinds), 3.3 * len(lengths)), squeeze=False)
     for r, T in enumerate(lengths):
-        for c, kind in enumerate(P.TYPES):
+        for c, kind in enumerate(kinds):
             ax = axs[r, c]; ax.scatter(reach[:, 0], reach[:, 1], s=1.5, c="#cccccc", lw=0)
             ws = [w for w in meta["windows"] if w["kind"] == kind and w["T"] == T]
             for w in ws:
@@ -75,21 +77,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pilot", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--gif-house", type=int, default=None)
+    ap.add_argument("--gif-houses", default="", help="comma list of house indices (default: the first)")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     houses = sorted(a.pilot.glob("house_*"))
     for hd in houses:
         sheet(hd, a.out / f"sheet_{hd.name}.png")
         print("sheet", hd.name, flush=True)
-    hd = a.pilot / f"house_{a.gif_house:05d}" if a.gif_house is not None else houses[0]
-    ws = json.loads((hd / "house.json").read_text())["windows"]
-    for kind in P.TYPES:
-        for T in sorted({w["T"] for w in ws}):
-            w = next((w for w in ws if w["kind"] == kind and w["T"] == T), None)
-            if w and (hd / f"{w['name']}.npz").exists() and "objects" in np.load(hd / f"{w['name']}.npz").files:
-                gif(hd, w["name"], a.out / f"{hd.name}_{w['name']}.gif")
-                print("gif", w["name"], flush=True)
+    for hd in [a.pilot / f"house_{int(x):05d}" for x in a.gif_houses.split(",")] if a.gif_houses else houses[:1]:
+        ws = json.loads((hd / "house.json").read_text())["windows"]
+        for kind in P.TYPES:
+            for T in sorted({w["T"] for w in ws}):
+                w = next((w for w in ws if w["kind"] == kind and w["T"] == T), None)
+                if w and (hd / f"{w['name']}.npz").exists() and "objects" in np.load(hd / f"{w['name']}.npz").files:
+                    gif(hd, w["name"], a.out / f"{hd.name}_{w['name']}.gif")
+                    print("gif", hd.name, w["name"], flush=True)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Pilot: plan + render route windows for a few val houses, both cells on identical paths. Render venv.
 
     cd datasets/prep && python -m procthor_routes.pilot --houses-root <procthor10k dir> --out <dir> \
-        [--houses 3,17,...] [--per 5] [--lengths 61,121] [--plan-only]
+        [--houses 3,17,...] [--per 5] [--lengths 61,121] [--types goal,...] [--plan-only]
 
 Per house: <out>/house_XXXXX/<type>_<T>_<k>.npz (objects, empty uint8 [T+4,120,160,3]; pos_h float64 [T+4,2];
 head_h float64 [T+4]; pos_u, psi_u) and house.json (windows: info + metrics; attempts per (type, T); timings).
@@ -22,9 +22,9 @@ from . import thor
 MAX_TRIES = 40
 
 
-def plan_house(h: P.House, hi: int, lengths, per: int):
+def plan_house(h: P.House, hi: int, lengths, per: int, types=P.TYPES):
     wins, attempts = [], {}
-    for kind in P.TYPES:
+    for kind in types:
         for T in lengths:
             got, tries, fails = 0, 0, {"plan": 0, "event": 0}
             while got < per and tries < MAX_TRIES:
@@ -55,6 +55,7 @@ def main():
     ap.add_argument("--houses", default="")
     ap.add_argument("--per", type=int, default=5)
     ap.add_argument("--lengths", default="61,121")
+    ap.add_argument("--types", default=",".join(P.TYPES))
     ap.add_argument("--plan-only", action="store_true")
     a = ap.parse_args()
     val = thor.load_split(a.houses_root, "val")
@@ -72,7 +73,7 @@ def main():
         reach = thor.reachable_positions(c); t_load = time.time() - t
         np.save(hd / "reach.npy", reach)
         t = time.time(); h = P.House(reach); t_graph = time.time() - t
-        t = time.time(); wins, attempts = plan_house(h, hi, lengths, a.per); t_plan = time.time() - t
+        t = time.time(); wins, attempts = plan_house(h, hi, lengths, a.per, a.types.split(",")); t_plan = time.time() - t
         meta = {"house_idx": hi, "n_rooms": len(house["rooms"]), "room_types": [r["roomType"] for r in house["rooms"]],
                 "n_objects": len(house["objects"]), "time_of_day": thor.time_of_day(house), "n_reachable": len(reach),
                 "walkable_m2": len(reach) * P.GRID ** 2, "attempts": attempts,

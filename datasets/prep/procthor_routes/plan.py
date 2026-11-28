@@ -17,6 +17,8 @@ the event starts at A at the first rollout step (frame 20), then the camera walk
   outback   walk out along a path (2-3 m; 61: ~1 m), turn 180 deg (0.02 m/step forward), retrace the path back to A
   loop      one circuit of a circle at walking pace (w 0.09-0.15 rad/step, radius 0.77-1.28 m; 61: w 0.157, 0.73 m)
   brownian  the training generator (Gaussian 0.1 m steps snapped to the grid, Gaussian 0.15 rad turns)
+  brownian_inertiaNN  the same, but each step repeats the previous (dx, dz, dpsi) with probability NN/100 (a fresh
+            draw otherwise, and always after a step that hit a wall); mean run of identical steps 1/(1-p) frames
 Seeded per (house, type, length, index, try); every try is counted.
 """
 from __future__ import annotations
@@ -35,7 +37,8 @@ WARMUP = 20
 PAD = 4                      # held frames after the window (decoder 2-frame tail + eval_windows 3-frame margin)
 V = 0.115                    # walking pace, m/step (training step median 0.115 m)
 W_MAX = 0.15                 # turn limit, rad/step (training |turn| p68.6)
-TYPES = ("goal", "turn", "outback", "loop", "brownian")
+INERTIA = {"brownian_inertia80": 0.80, "brownian_inertia90": 0.90, "brownian_inertia95": 0.95}
+TYPES = ("goal", "turn", "outback", "loop", "brownian", *INERTIA)   # append only: index seeds the pilot rng
 
 
 def wrap(a):
@@ -204,6 +207,8 @@ def plan(h: House, kind: str, T: int, rng) -> dict | None:
     R = T - 1 - WARMUP
     if kind == "brownian":
         return _brownian(h, T, rng)
+    if kind in INERTIA:
+        return _brownian(h, T, rng, p_keep=INERTIA[kind], kind=kind)
     info = {}
     if kind == "goal":
         i0 = int(rng.choice(np.where(h.clear >= 0.5)[0] if (h.clear >= 0.5).any() else np.arange(len(h.reach))))
@@ -278,17 +283,26 @@ def _pack(kind, T, P, Psi, info):
     return {"kind": kind, "T": T, "pos_u": P, "psi_u": Psi, "info": info}
 
 
-def _brownian(h: House, T: int, rng, step_std=0.1, angle_std=0.15) -> dict:
-    """The procthor-walks generator's motion (walk_and_render), from a start clear of walls."""
+def _brownian(h: House, T: int, rng, step_std=0.1, angle_std=0.15, p_keep=0.0, kind="brownian") -> dict:
+    """The procthor-walks generator's motion (walk_and_render), from a start clear of walls. p_keep > 0: with that
+    probability repeat the previous step's (dx, dz, dpsi) instead of drawing anew; a step snapped back by the wall
+    check ends the run. p_keep = 0 draws exactly the generator's random stream."""
     pos = h.reach[rng.choice(np.where(h.nbrs >= np.quantile(h.nbrs, 0.9))[0])].astype(float)
-    yaw = float(rng.uniform(-math.pi, math.pi)); P = [pos.copy()]; Psi = [yaw]
+    yaw = float(rng.uniform(-math.pi, math.pi)); P = [pos.copy()]; Psi = [yaw]; last = None; runs = 0
     for _ in range(T - 1):
-        cand = pos + rng.normal(0.0, step_std, 2)
+        if last is not None and p_keep > 0 and rng.random() < p_keep:
+            dp, dyaw = last
+        else:
+            dp, dyaw = rng.normal(0.0, step_std, 2), rng.normal(0.0, angle_std); runs += 1
+        cand = pos + dp
         d, j = h.tree.query(cand)
-        pos = h.reach[j].astype(float) if d > SNAP_TOL else cand
-        yaw = float(wrap(yaw + rng.normal(0.0, angle_std)))
+        if d > SNAP_TOL:
+            pos = h.reach[j].astype(float); last = None
+        else:
+            pos = cand; last = (dp, dyaw)
+        yaw = float(wrap(yaw + dyaw))
         P.append(pos.copy()); Psi.append(yaw)
-    return _pack("brownian", T, P, Psi, {})
+    return _pack(kind, T, P, Psi, {"p_keep": p_keep, "fresh_draws": runs})
 
 
 def metrics(w: dict) -> dict:
