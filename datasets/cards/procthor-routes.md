@@ -51,6 +51,12 @@ are ≤ 0.16 rad.
 | `brownian_inertia80` | Brownian, but each frame repeats the previous step (dx, dz, dθ) with probability 0.8 | 1,000 / 1,000 |
 | `brownian_inertia95` | same with probability 0.95 | 1,000 / 1,000 |
 
+**Doorways.** `door_crossings` counts the camera's room changes, from each house's floor polygons. Doors and open
+archways both count, and stepping back and forth across a threshold counts each time. Share of clips with at least one
+room change after the warm-up (61 / 121): goal_directed 28 % / 50 %, out_and_back 4 % / 41 %, full_turn 3 % / 32 %,
+loop 10 % / 33 %, brownian 6 % / 10 %, inertia variants 10 % / 17 %. Over the whole clip, goal_directed changes room
+in 40 % / 55 % of clips (53 % / 74 % in houses with more than one room), 0.46 / 0.85 times on average.
+
 Counts fall below 1,000 where a house has no room for the event. One-room houses mostly can't fit a loop circle.
 Every planner attempt is counted in the prep output.
 
@@ -103,6 +109,7 @@ An RTX 4090 differed more (7–10 % of pixels), so all clips were rendered on A1
 | `house_idx`, `n_rooms`, `n_objects`, `time_of_day` | 42, 10, 63, GoldenHour |
 | `event_start`, `event_end` | 20, 60: the turn runs from frame 20 to 60 (empty for Brownian clips) |
 | `turn_rate`, `p_keep` | 0.157 rad/frame, — (inertia probability for Brownian-with-inertia clips) |
+| `door_crossings`, `door_crossings_rollout`, `rooms_visited` | 0, 0, 1: room changes over the clip / after the warm-up (frame ≥ 20), distinct rooms entered |
 | `info`, `metrics` | JSON: event geometry (start point A, loop radius, out distance, …) and per-clip motion metrics |
 
 Positions and headings use the same convention as procthor-walks, so its egomotion code applies unchanged.

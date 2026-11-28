@@ -4,6 +4,8 @@ torchcodec).
     python -m datasets.prep.procthor_routes.build store --render <dir> --split val --cell objects --store-root <dir>
     python -m datasets.prep.procthor_routes.build index --render <dir> --split val --tree-root <dir>   # both cells
     python -m datasets.prep.procthor_routes.build pair --store-root <dir> --split val                  # cross-cell check
+    python -m datasets.prep.procthor_routes.build records --render <dir> --split val --cell objects --store-root <dir>
+        # rewrite records.parquet of a built store (new columns; clip_ids and existing columns must be unchanged)
 
 One store per (cell, split): `procthor-routes-<cell>-lossless-160x120-<split>`, one record per window, both lengths
 (load() picks a store by split; the subset selects the route type and length). Records in sorted clip_id order;
@@ -14,7 +16,10 @@ clip_id `<split>/house_XXXXX/<subset>_<k>`, identical in both cells (same camera
     fps / num_frames / duration_s 30 / T+4 / (T+4)/30. T+4 = the window (20 warm-up + rollout + 1 target) + 4 held frames,
                                   so `eval_windows(T)` serves exactly one window per record, from frame 0.
 records.parquet: record_idx, clip_id, split, subset, route, window_frames (T), house_idx, k, n_rooms, n_objects,
-time_of_day, seed, event_start / event_end (frame index; None for Brownian), turn_rate, p_keep, info / metrics (JSON).
+time_of_day, seed, event_start / event_end (frame index; None for Brownian), turn_rate, p_keep, info / metrics (JSON),
+door_crossings / door_crossings_rollout / rooms_visited (room changes over frames 0..T-1 / at frames >= 20, distinct rooms;
+`rooms()`: the camera's room per frame from the house's floor polygons; a doorway or open archway between two rooms
+counts, and stepping back and forth across a threshold counts each time).
 Tables (`<tree-root>/procthor-routes-<cell>/`): splits/v1.parquet (clip_id, split), subsets/<subset>.parquet (clip_id).
 
 Verification (every record; exit 1 on failure): all frames decoded with torchcodec == rendered frames byte for byte;
@@ -24,6 +29,7 @@ the eval window (slipstream DecodeVideoWindow, T frames, t0 = 0.5/30) == frames[
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import sys
 import time
@@ -53,11 +59,45 @@ def store_name(cell: str, split: str) -> str:
     return f"{dataset(cell)}-lossless-{RES}-{split}"
 
 
+ROLLOUT_START = 20
+
+
+def houses_file(render: Path, split: str) -> Path:
+    """The ProcTHOR house file the render used: <render>/../source/<split>.json.gz."""
+    return render.parent / "source" / f"{split}.json.gz"
+
+
+def _inside(x: float, z: float, poly: np.ndarray) -> bool:
+    px, pz = poly[:, 0], poly[:, 1]; qx, qz = np.roll(px, -1), np.roll(pz, -1)
+    hit = ((pz > z) != (qz > z)) & (x < (qx - px) * (z - pz) / np.where(qz == pz, 1e-12, qz - pz) + px)
+    return bool(hit.sum() % 2)
+
+
+def rooms(pos_u: np.ndarray, polys: list[np.ndarray]) -> list[int | None]:
+    """Room index per frame (Unity x, z vs floor polygons); a point in no room keeps the previous room."""
+    out, prev = [], None
+    for x, z in pos_u:
+        r = next((i for i, p in enumerate(polys) if _inside(x, z, p)), None)
+        prev = prev if r is None else r
+        out.append(prev)
+    return out
+
+
+def door_stats(pos_u: np.ndarray, T: int, polys: list[np.ndarray]) -> dict:
+    lab = rooms(np.asarray(pos_u)[:T], polys)
+    ch = [t for t in range(1, T) if lab[t] is not None and lab[t - 1] is not None and lab[t] != lab[t - 1]]
+    return dict(door_crossings=len(ch), door_crossings_rollout=sum(t >= ROLLOUT_START for t in ch),
+                rooms_visited=len({r for r in lab if r is not None}))
+
+
 def records(render: Path, split: str) -> pd.DataFrame:
     """One row per rendered window (both cells share it), sorted by clip_id."""
+    houses = json.load(gzip.open(houses_file(render, split), "rt"))
     rows = []
     for hj in sorted(render.glob("house_*/house.json")):
         m = json.loads(hj.read_text())
+        polys = [np.array([[p["x"], p["z"]] for p in r["floorPolygon"]], float) for r in houses[m["house_idx"]]["rooms"]]
+        assert len(polys) == m["n_rooms"], (hj, len(polys), m["n_rooms"])
         for w in m["windows"]:
             if w["kind"] not in ROUTE:
                 continue
@@ -71,6 +111,7 @@ def records(render: Path, split: str) -> pd.DataFrame:
                              turn_rate=float(info["turn_rate"]) if "turn_rate" in info else None,
                              p_keep=float(info["p_keep"]) if "p_keep" in info else None,
                              info=json.dumps(info), metrics=json.dumps(w["metrics"]),
+                             **door_stats(np.load(hj.parent / f"{w['name']}.npz")["pos_u"], int(w["T"]), polys),
                              src_path=str(hj.parent / f"{w['name']}.npz")))
     df = pd.DataFrame(rows).sort_values("clip_id").reset_index(drop=True)
     df.insert(0, "record_idx", range(len(df)))
@@ -186,6 +227,24 @@ def cmd_store(a) -> int:
     return 0 if v["ok"] else 1
 
 
+def cmd_records(a) -> int:
+    """New records.parquet for a built store: same clip_ids in the same order, existing columns unchanged."""
+    store = a.store_root / store_name(a.cell, a.split)
+    old, new = pd.read_parquet(store / "records.parquet"), records(a.render, a.split)
+    if old["clip_id"].tolist() != new["clip_id"].tolist():
+        sys.exit("clip_ids differ from the store's records")
+    diff = [c for c in old.columns if c not in new.columns or not old[c].equals(new[c])]
+    if diff:
+        sys.exit(f"existing columns changed: {diff}")
+    added = [c for c in new.columns if c not in old.columns]
+    new.to_parquet(store / "records.parquet", index=False)
+    sm = json.loads((store / "store_manifest.json").read_text())
+    sm.setdefault("records_updates", []).append(dict(added=added, at=time.strftime("%Y-%m-%dT%H:%M:%S")))
+    (store / "store_manifest.json").write_text(json.dumps(sm, indent=1, default=int))
+    print(f"RECORDS {store.name}: {len(new)} rows, added {added}", flush=True)
+    return 0
+
+
 def cmd_index(a) -> int:
     rec = records(a.render, a.split)
     for cell in CELLS:
@@ -229,8 +288,10 @@ def main(argv=None) -> int:
     i = sub.add_parser("index"); i.add_argument("--render", type=Path, required=True); i.add_argument("--split", required=True)
     i.add_argument("--tree-root", type=Path, required=True)
     p = sub.add_parser("pair"); p.add_argument("--store-root", type=Path, required=True); p.add_argument("--split", required=True)
+    r = sub.add_parser("records"); r.add_argument("--render", type=Path, required=True); r.add_argument("--split", required=True)
+    r.add_argument("--cell", choices=CELLS, required=True); r.add_argument("--store-root", type=Path, required=True)
     a = ap.parse_args(argv)
-    return {"store": cmd_store, "index": cmd_index, "pair": cmd_pair}[a.cmd](a)
+    return {"store": cmd_store, "index": cmd_index, "pair": cmd_pair, "records": cmd_records}[a.cmd](a)
 
 
 if __name__ == "__main__":

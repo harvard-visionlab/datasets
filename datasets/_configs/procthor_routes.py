@@ -15,7 +15,7 @@ One store per (cell, split) holding both lengths: `<name>-lossless-160x120-<spli
 frames (4 held frames serve the decoder margin): `video` (mp4, H.264 RGB lossless, byte-exact renders), `positions`
 float64[125,2] and `headings` float64[125] (Habitat convention, as procthor-walks; NaN beyond num_frames),
 `fps`/`num_frames`/`duration_s`. records.parquet adds subset, route, window_frames, house, event frames, turn rate,
-inertia p. Built by `datasets/prep/procthor_routes/` (README there); card `cards/procthor-routes.md`.
+inertia p, door crossings. Built by `datasets/prep/procthor_routes/` (README there); card `cards/procthor-routes.md`.
 """
 from ..registry import DatasetConfig, register
 from .procthor_walks import _EGO, _STATS
