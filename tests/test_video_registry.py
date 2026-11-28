@@ -279,3 +279,31 @@ def test_procthor_lossless_store_registered_for_val_unseen_only():
         store_part(lossless, split, "val")
     records = pd.DataFrame({"clip_id": ["val/h0/s0", "val/h0/s1"]})            # the partial store's walks
     assert _covered_splits(records, split) == ["val_unseen"]
+
+
+@pytest.mark.parametrize("name", ["procthor-routes-objects", "procthor-routes-empty"])
+def test_procthor_routes_configs(name):
+    from visionlab.datasets._configs.procthor_routes import ROUTES
+    cfg = get_config(name)
+    assert cfg.is_video and set(cfg.splits) == {"v1"}
+    assert set(cfg.subsets) == {f"{r}_{t}" for r in ROUTES for t in (61, 121)} and len(cfg.subsets) == 14
+    assert rank_stores(cfg.stores, "lossless", "160x120", None, None) == [("lossless", "160x120", None)]
+    assert set(cfg.stores[("lossless", "160x120", None)]) == {"val"}
+    m = cfg.metadata
+    assert m["default_fmt"] == "lossless" and m["default_subset"] is None
+    walks = get_config(name.replace("routes", "walks")).metadata["stats"]
+    assert m["stats"]["rgb"] == walks["rgb"]                                # normalised as in procthor-walks training
+
+
+def test_procthor_routes_records_give_one_eval_window_from_frame_0():
+    """A route record holds T+4 frames at 30 fps: eval_windows(T) serves exactly one window, starting at frame 0;
+    a 61-window record is too short for T=121."""
+    n = np.array([65, 125, 65, 125])
+    clips = pd.DataFrame({"record_idx": range(4), "clip_id": [f"val/house_00000/x_{i}" for i in range(4)],
+                          "fps": 30.0, "num_frames": n, "duration_s": n / 30})
+    ds = VideoDataset("x", ("lossless", "160x120", None), None, None, clips, "val", None, None)
+    for T, want in ((61, [0, 2]), (121, [1, 3])):
+        recs, t0 = ds.eval_windows(T=T, rate_hz=30)
+        if T == 61:                                                         # 125-frame records also fit T=61: use a subset
+            recs, t0 = recs[np.isin(recs, want)], t0[np.isin(recs, want)]
+        assert recs.tolist() == want and np.allclose(t0, 0.5 / 30)
